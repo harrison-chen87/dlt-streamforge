@@ -1,0 +1,36 @@
+table: valve_compliance_changes
+type: change_feed
+num_rows: 100
+change_feed_rules:
+  operation_distribution:
+    INSERT: 1
+    UPDATE: 2
+    DELETE: 0.1
+  updatable_fields:
+    - compliance_status
+    - inspector_id
+    - inspection_notes
+  time_range:
+    start_date: "2024-01-01"
+    end_date: "2024-12-31"
+  time_between_changes:
+    min: 1
+    max: 30
+  delete_null_fields:
+    - compliance_status
+    - inspector_id
+    - inspection_notes
+  dlt_config:
+    keys: ["valve_id"]
+    sequence_by: "change_timestamp"
+columns:
+  valve_id: int
+  compliance_status:
+    type: string
+    format: "COMPLIANT|NON_COMPLIANT|PENDING_REVIEW"
+  inspector_id: int
+  inspection_notes: string
+  operation:
+    type: string
+    format: "INSERT|UPDATE|DELETE"
+  change_timestamp: datetime 

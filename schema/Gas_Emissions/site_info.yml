@@ -1,0 +1,24 @@
+table: site_info
+type: dimension
+num_rows: 20
+columns:
+  site_id: int
+  site_name:
+    type: string
+    format: "SITE-####"
+  location:
+    type: string
+    format: "LOC-####"
+  latitude: float
+  longitude: float
+  site_type:
+    type: string
+    format: "PRODUCTION|STORAGE|PROCESSING"
+  commissioning_date: datetime
+  operational_status:
+    type: string
+    format: "ACTIVE|INACTIVE|MAINTENANCE"
+  site_manager:
+    type: string
+    format: "MGR-####"
+  emergency_contact: string 

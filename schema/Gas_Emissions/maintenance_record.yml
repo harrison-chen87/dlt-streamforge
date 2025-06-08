@@ -1,0 +1,29 @@
+table: maintenance_record
+type: fact
+num_rows: 500
+columns:
+  maintenance_id: int
+  asset_id: int
+  inspector_id: int
+  site_id: int
+  maintenance_type:
+    type: string
+    format: "PREVENTIVE|CORRECTIVE|EMERGENCY"
+    null_probability: 0.01
+  start_time: datetime
+  end_time:
+    type: datetime
+    null_probability: 0.02
+  status:
+    type: string
+    format: "SCHEDULED|IN_PROGRESS|COMPLETED|CANCELLED"
+    null_probability: 0.01
+  cost:
+    type: float
+    null_probability: 0.03
+  parts_replaced:
+    type: string
+    null_probability: 0.04
+  notes:
+    type: string
+    null_probability: 0.05 

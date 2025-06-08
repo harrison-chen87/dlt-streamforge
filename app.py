@@ -702,7 +702,7 @@ def control_generation(button_clicks, n_intervals, selected_language, selected_i
         if not status["running"] or not status["industry"]:
             raise dash.exceptions.PreventUpdate
         
-        if status['start_time'] and (time.time() - status['start_time']) > (3600 * 4):  # 4 hour limit
+        if status['start_time'] and (time.time() - status['start_time']) > 14400:  # 4 hour limit
             print("\nTime limit reached...")
             status["running"] = False
             status["industry"] = None
@@ -710,7 +710,7 @@ def control_generation(button_clicks, n_intervals, selected_language, selected_i
             section_style['display'] = 'none'
             export_button_style['display'] = 'none'
             
-            return True, "Generation stopped after 1 hour.", "Start", start_style, None, section_style, export_button_style
+            return True, "Generation stopped after 4 hours.", "Start", start_style, None, section_style, export_button_style
         
         try:
             generate_files_for_industry(status["industry"])

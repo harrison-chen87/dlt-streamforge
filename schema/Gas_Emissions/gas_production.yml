@@ -1,0 +1,34 @@
+table: gas_production
+type: fact
+num_rows: 1000
+columns:
+  production_id: int
+  site_id: int
+  asset_id: int
+  timestamp: datetime
+  gas_volume_m3:
+    type: float
+    null_probability: 0.02
+  gas_pressure:
+    type: float
+    null_probability: 0.03
+  gas_temperature:
+    type: float
+    null_probability: 0.02
+  gas_quality:
+    type: string
+    format: "HIGH|MEDIUM|LOW"
+    null_probability: 0.01
+  production_status:
+    type: string
+    format: "NORMAL|REDUCED|STOPPED"
+    null_probability: 0.01
+data_quality_rules:
+  gas_volume_m3:
+    min_value: 0
+    max_value: 10000
+    anomaly_percentage: 0.03
+  gas_pressure:
+    min_value: 0
+    max_value: 500
+    anomaly_percentage: 0.02 

@@ -1,0 +1,35 @@
+table: daily_weather
+type: fact
+num_rows: 365
+columns:
+  weather_id: int
+  site_id: int
+  date: datetime
+  temperature_celsius:
+    type: float
+    null_probability: 0.01
+  humidity_percentage:
+    type: float
+    null_probability: 0.02
+  wind_speed_kmh:
+    type: float
+    null_probability: 0.03
+  precipitation_mm:
+    type: float
+    null_probability: 0.02
+  atmospheric_pressure:
+    type: float
+    null_probability: 0.01
+  weather_condition:
+    type: string
+    format: "CLEAR|CLOUDY|RAIN|SNOW|STORM"
+    null_probability: 0.01
+data_quality_rules:
+  temperature_celsius:
+    min_value: -40
+    max_value: 50
+    anomaly_percentage: 0.02
+  humidity_percentage:
+    min_value: 0
+    max_value: 100
+    anomaly_percentage: 0.02 
