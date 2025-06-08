@@ -1,0 +1,41 @@
+table: alert_history
+type: fact
+num_rows: 1000
+columns:
+  alert_id: int
+  asset_id: int
+  site_id: int
+  emission_id: int
+  alert_timestamp: datetime
+  alert_type:
+    type: string
+    format: "THRESHOLD|MALFUNCTION|CALIBRATION|COMPLIANCE"
+    null_probability: 0.01
+  severity:
+    type: string
+    format: "LOW|MEDIUM|HIGH|CRITICAL"
+    null_probability: 0.01
+  threshold_value: 
+    type: float
+    null_probability: 0.02
+  measured_value:
+    type: float
+    null_probability: 0.02
+  resolution_timestamp:
+    type: datetime
+    null_probability: 0.03
+  resolution_action:
+    type: string
+    format: "MAINTENANCE|CALIBRATION|SHUTDOWN|ADJUSTMENT"
+    null_probability: 0.02
+  inspector_id:
+    type: int
+    null_probability: 0.03
+  notes:
+    type: string
+    null_probability: 0.05
+data_quality_rules:
+  threshold_value:
+    min_value: 0
+    max_value: 1000
+    anomaly_percentage: 0.03 

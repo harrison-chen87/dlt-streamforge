@@ -1,0 +1,27 @@
+table: compliance_regulations
+type: dimension
+num_rows: 50
+columns:
+  regulation_id: int
+  regulation_code:
+    type: string
+    format: "REG-####"
+  regulation_type:
+    type: string
+    format: "EMISSIONS|SAFETY|OPERATIONAL|ENVIRONMENTAL"
+  description: string
+  effective_date: datetime
+  expiry_date: datetime
+  jurisdiction:
+    type: string
+    format: "FEDERAL|STATE|LOCAL"
+  emission_threshold: float
+  compliance_frequency:
+    type: string
+    format: "DAILY|WEEKLY|MONTHLY|QUARTERLY|ANNUAL"
+  regulatory_body:
+    type: string
+    format: "EPA|DOE|STATE"
+  status:
+    type: string
+    format: "ACTIVE|PENDING|EXPIRED|SUPERSEDED" 

@@ -21,10 +21,11 @@ change_feed_rules:
     - inspector_id
     - inspection_notes
   dlt_config:
-    keys: ["valve_id"]
+    keys: ["valve_id", "asset_id"]
     sequence_by: "change_timestamp"
 columns:
   valve_id: int
+  asset_id: int
   compliance_status:
     type: string
     format: "COMPLIANT|NON_COMPLIANT|PENDING_REVIEW"
