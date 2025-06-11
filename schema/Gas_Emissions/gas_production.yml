@@ -8,21 +8,16 @@ columns:
   timestamp: datetime
   gas_volume_m3:
     type: float
-    null_probability: 0.02
   gas_pressure:
     type: float
-    null_probability: 0.03
   gas_temperature:
     type: float
-    null_probability: 0.02
   gas_quality:
     type: string
     format: "HIGH|MEDIUM|LOW"
-    null_probability: 0.01
   production_status:
     type: string
     format: "NORMAL|REDUCED|STOPPED"
-    null_probability: 0.01
 data_quality_rules:
   gas_volume_m3:
     min_value: 0

@@ -27,7 +27,6 @@ columns:
   alert_status:
     type: string
     format: "NORMAL|WARNING|CRITICAL"
-    null_probability: 0.01
 data_quality_rules:
   methane_level:
     min_value: 0

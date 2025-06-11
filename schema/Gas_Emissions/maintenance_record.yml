@@ -9,7 +9,6 @@ columns:
   maintenance_type:
     type: string
     format: "PREVENTIVE|CORRECTIVE|EMERGENCY"
-    null_probability: 0.01
   start_time: datetime
   end_time:
     type: datetime
@@ -17,7 +16,6 @@ columns:
   status:
     type: string
     format: "SCHEDULED|IN_PROGRESS|COMPLETED|CANCELLED"
-    null_probability: 0.01
   cost:
     type: float
     null_probability: 0.03

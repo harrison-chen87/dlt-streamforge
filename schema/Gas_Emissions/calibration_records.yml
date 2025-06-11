@@ -10,24 +10,18 @@ columns:
   calibration_type:
     type: string
     format: "FULL|ZERO|SPAN|LINEARITY"
-    null_probability: 0.01
   pre_calibration_reading: 
     type: float
-    null_probability: 0.02
   post_calibration_reading:
     type: float
-    null_probability: 0.02
   drift_percentage:
     type: float
-    null_probability: 0.02
   calibration_status:
     type: string
     format: "PASSED|FAILED|ADJUSTED"
-    null_probability: 0.01
   calibration_standard:
     type: string
     format: "STD-####"
-    null_probability: 0.02
   notes:
     type: string
     null_probability: 0.05
