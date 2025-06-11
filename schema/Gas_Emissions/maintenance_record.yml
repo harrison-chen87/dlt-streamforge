@@ -21,7 +21,13 @@ columns:
     null_probability: 0.03
   parts_replaced:
     type: string
+    format: "VALVE|CIRCUIT_BOARD|WELL_HEAD|PUMP|SENSOR_READER"
     null_probability: 0.04
   notes:
     type: string
-    null_probability: 0.05 
+    null_probability: 0.05
+data_quality_rules:
+  cost:
+    min_value: 0
+    max_value: 100000
+    anomaly_percentage: 0.05

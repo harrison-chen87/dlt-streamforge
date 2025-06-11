@@ -13,7 +13,6 @@ columns:
   severity:
     type: string
     format: "LOW|MEDIUM|HIGH|CRITICAL"
-    null_probability: 0.01
   threshold_value: 
     type: float
   measured_value:
@@ -27,7 +26,6 @@ columns:
     type: int
   notes:
     type: string
-    null_probability: 0.05
 data_quality_rules:
   threshold_value:
     min_value: 0

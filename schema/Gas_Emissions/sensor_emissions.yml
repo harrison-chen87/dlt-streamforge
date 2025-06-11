@@ -30,9 +30,25 @@ columns:
 data_quality_rules:
   methane_level:
     min_value: 0
+    max_value: 1000
+    anomaly_percentage: 0.05
+  co2_level:
+    min_value: 0
+    max_value: 1000
+    anomaly_percentage: 0.01
+  nox_level:
+    min_value: 0
+    max_value: 1000
+    anomaly_percentage: 0.02
+  temperature:
+    min_value: -20
     max_value: 100
     anomaly_percentage: 0.05
   pressure:
     min_value: 0
     max_value: 1000
-    anomaly_percentage: 0.03 
+    anomaly_percentage: 0.03
+  flow_rate:
+    min_value: 0
+    max_value: 10000
+    anomaly_percentage: 0.05 

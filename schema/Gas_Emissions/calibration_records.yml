@@ -24,7 +24,6 @@ columns:
     format: "STD-####"
   notes:
     type: string
-    null_probability: 0.05
 data_quality_rules:
   drift_percentage:
     min_value: 0
