@@ -1,23 +1,65 @@
-table: daily_weather
-type: fact
-num_rows: 365
+table_name: daily_weather
+generator_class: WeatherGenerator  # Specify the new weather generator
+primary_key: weather_id
 columns:
-  weather_id: int
-  site_id: int
-  date: datetime
-  temperature_celsius:
-    type: float
-  humidity_percentage:
-    type: float
-  wind_speed_kmh:
-    type: float
-  precipitation_mm:
-    type: float
-  atmospheric_pressure:
-    type: float
-  weather_condition:
-    type: string
-    format: "CLEAR|CLOUDY|RAIN|SNOW|STORM"
+  - name: weather_id
+    data_type: string
+    generator:
+      type: uuid
+  - name: site_id
+    data_type: string
+    generator:
+      type: reference
+      table: site_info
+      column: site_id
+  - name: date
+    data_type: date
+    generator:
+      type: date
+  - name: temperature_celsius
+    data_type: double
+    generator:
+      type: float
+      min: -40
+      max: 50
+  - name: humidity_percentage
+    data_type: double
+    generator:
+      type: float
+      min: 0
+      max: 100
+  - name: wind_speed_kmh
+    data_type: double
+    generator:
+      type: float
+      min: 0
+      max: 200
+  - name: precipitation_mm
+    data_type: double
+    generator:
+      type: float
+      min: 0
+      max: 500
+  - name: atmospheric_pressure
+    data_type: double
+    generator:
+      type: float
+      min: 980
+      max: 1030
+  - name: weather_condition
+    data_type: string
+    generator:
+      type: choice
+      values:
+        - Clear
+        - Partly Cloudy
+        - Cloudy
+        - Rain
+        - Light Rain
+        - Heavy Rain
+        - Thunderstorm
+        - Fog
+        - Mist
 data_quality_rules:
   temperature_celsius:
     min_value: -40

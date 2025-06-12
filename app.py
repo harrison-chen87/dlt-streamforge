@@ -5,7 +5,13 @@ import yaml
 import time
 import json
 import logging
-from data_generators import DimensionGenerator, FactGenerator, ChangeFeedGenerator, BaseGenerator
+from data_generators import (
+    DimensionGenerator, 
+    FactGenerator, 
+    ChangeFeedGenerator, 
+    BaseGenerator,
+    WeatherGenerator
+)
 from dash.dependencies import ClientsideFunction
 from threading import Thread
 import threading
