@@ -1,6 +1,9 @@
 table: sensor_emissions
 type: fact
 num_rows: 100000
+generator_config:
+  start_date: "2020-01-01"  # Standardized start date
+  end_date: "now"           # Up to current date
 columns:
   emission_id: int
   asset_id: int

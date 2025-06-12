@@ -1,6 +1,9 @@
 table: daily_weather
 type: fact
 generator_class: WeatherGenerator  # Specify the new weather generator
+generator_config:
+  start_date: "2020-01-01"  # Standardized start date
+  end_date: "now"           # Special value 'now' means current date
 primary_key: weather_id
 columns:
   - name: weather_id

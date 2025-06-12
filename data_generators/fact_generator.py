@@ -2,12 +2,35 @@ from .base_generator import BaseGenerator
 import pandas as pd
 from faker import Faker
 import random
+from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 class FactGenerator(BaseGenerator):
     def __init__(self, schema_path, output_base_path, dimension_key_ranges, is_local=True):
         super().__init__(schema_path, output_base_path, is_local=is_local)
         self.fake = Faker()
         self.dimension_key_ranges = dimension_key_ranges
+        
+        # Load date range from schema configuration
+        config = self.schema.get('generator_config', {})
+        
+        # Get start date from config or default to 1970-01-01
+        start_date_str = config.get('start_date')
+        if start_date_str:
+            self.start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+        else:
+            self.start_date = datetime(1970, 1, 1)
+        
+        # Get end date from config or default to now
+        end_date_str = config.get('end_date')
+        if end_date_str and end_date_str.lower() != 'now':
+            self.end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+        else:
+            self.end_date = datetime.now()
+            
+        logger.info(f"Configured date range for {self.schema.get('table', 'unknown')}: {self.start_date} to {self.end_date}")
         
     def _generate_value(self, col, col_def):
         """Generate a value based on column definition."""
@@ -35,7 +58,14 @@ class FactGenerator(BaseGenerator):
                 
             return value
             
-        # Use base implementation if no quality rules
+        # Special handling for datetime fields
+        if isinstance(col_def, dict) and col_def.get('type') == 'datetime':
+            return self.fake.date_time_between(
+                start_date=self.start_date,
+                end_date=self.end_date
+            ).isoformat()
+            
+        # Use base implementation for all other types
         return super()._generate_value(col, col_def)
 
     def _generate_value_with_quality_rules(self, col, col_def):

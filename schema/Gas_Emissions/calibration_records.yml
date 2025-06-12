@@ -1,6 +1,9 @@
 table: calibration_records
 type: fact
 num_rows: 500
+generator_config:
+  start_date: "2020-01-01"  # Standardized start date
+  end_date: "now"           # Up to current date
 columns:
   calibration_id: int
   asset_id: int
