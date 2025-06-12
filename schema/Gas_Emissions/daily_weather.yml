@@ -1,4 +1,5 @@
-table_name: daily_weather
+table: daily_weather
+type: fact
 generator_class: WeatherGenerator  # Specify the new weather generator
 primary_key: weather_id
 columns:

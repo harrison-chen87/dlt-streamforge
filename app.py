@@ -404,9 +404,13 @@ def generate_files_for_industry(industry):
 
     # Process all tables
     for schema in schemas:
-        table = schema["table"]
-        table_type = schema.get("type", "fact")
+        # Handle both table and table_name keys for backward compatibility
+        table = schema.get("table") or schema.get("table_name")
+        if not table:
+            logger.error(f"Schema missing both 'table' and 'table_name' keys: {schema}")
+            continue
 
+        table_type = schema.get("type", "fact")
         logger.info(f"\nProcessing table: {table} (type: {table_type})")
 
         # Skip dimension tables after first iteration
@@ -421,15 +425,28 @@ def generate_files_for_industry(industry):
             # Determine if we're in a local environment based on the output path
             is_local = not status['output_path'].startswith('/Volumes/')
             
-            # Select appropriate generator based on table type
-            if table_type == "dimension":
-                generator = DimensionGenerator(schema_path, status['output_path'], is_local=is_local)
-            elif table_type == "fact":
-                generator = FactGenerator(schema_path, status['output_path'], dimension_key_ranges, is_local=is_local)
-            elif table_type == "change_feed":
-                generator = ChangeFeedGenerator(schema_path, status['output_path'], is_local=is_local)
-            else:
-                logger.warning(f"Unknown table type: {table_type}")
+            # Select appropriate generator based on table type and generator class
+            generator = None
+            try:
+                # Check for explicit generator class first
+                generator_class = schema.get('generator_class')
+                if generator_class == 'WeatherGenerator':
+                    generator = WeatherGenerator(schema_path, status['output_path'], is_local=is_local)
+                elif table_type == "dimension":
+                    generator = DimensionGenerator(schema_path, status['output_path'], is_local=is_local)
+                elif table_type == "fact":
+                    generator = FactGenerator(schema_path, status['output_path'], dimension_key_ranges, is_local=is_local)
+                elif table_type == "change_feed":
+                    generator = ChangeFeedGenerator(schema_path, status['output_path'], is_local=is_local)
+                else:
+                    logger.warning(f"Unknown table type or generator class: {table_type}, {generator_class}")
+                    continue
+            except Exception as e:
+                logger.error(f"Error creating generator for table {table}: {str(e)}")
+                raise
+
+            if not generator:
+                logger.warning(f"No suitable generator found for table {table}")
                 continue
 
             # Generate and save data
