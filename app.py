@@ -89,7 +89,8 @@ status = {
     "selected_industry": None,
     "path_input": None,
     "selected_dlt_output": None,
-    "selected_dlt_mode": None  # Add new state for DLT mode
+    "selected_dlt_mode": None,
+    "duration_hours": 4  # Default to 4 hours
 }
 
 def generation_service():
@@ -153,7 +154,8 @@ def get_state():
             "selected_industry": status["selected_industry"],
             "path_input": status["path_input"],
             "selected_dlt_output": status["selected_dlt_output"],
-            "selected_dlt_mode": status["selected_dlt_mode"]
+            "selected_dlt_mode": status["selected_dlt_mode"],
+            "duration_hours": status["duration_hours"]
         }
         print("Returning state:", state)  # Add debug logging
         return jsonify(state)
@@ -392,6 +394,15 @@ def generate_files_for_industry(industry):
 
     schemas = load_all_schemas(industry)
     dlt_references = []
+
+    # Check and clean up output directory before starting
+    if current_iteration == 0:
+        output_dir = os.path.join(status['output_path'], industry)
+        # Create a temporary generator instance to handle directory cleanup
+        is_local = not status['output_path'].startswith('/Volumes/')
+        # Use DimensionGenerator since it's the simplest concrete implementation
+        temp_generator = DimensionGenerator(None, status['output_path'], is_local=is_local)
+        temp_generator._check_directory_empty(output_dir)
 
     # Store dimension key ranges in first iteration
     if current_iteration == 0:
@@ -717,9 +728,46 @@ def create_input_section():
                         'fontSize': '14px',
                         'width': '200px',
                         'display': 'inline-block',
-                        'verticalAlign': 'middle'
+                        'verticalAlign': 'middle',
+                        'marginRight': '12px'
                     }
                 ),
+            ], style={'marginBottom': '20px', 'textAlign': 'center'}),
+            html.Div([
+                html.Div([
+                    html.Label(
+                        "Duration (hours):",
+                        style={
+                            'display': 'inline-block',
+                            'marginRight': '10px',
+                            'fontSize': '14px',
+                            'fontWeight': '500',
+                            'color': '#666666'  # Darker gray for better readability
+                        }
+                    ),
+                    dcc.Input(
+                        id='duration-input',
+                        type='number',
+                        value=1,
+                        min=1,
+                        max=24,
+                        placeholder='Enter number of hours (1-24)',
+                        style={
+                            'width': '120px',  # Reduced width since it's side by side
+                            'padding': '8px 12px',
+                            'border': f'1px solid {DB_COLORS["border"]}',
+                            'borderRadius': '4px',
+                            'fontSize': '14px',
+                            'display': 'inline-block',
+                            'verticalAlign': 'middle',
+                            'color': '#333333'  # Darker text color for better readability
+                        }
+                    ),
+                ], style={
+                    'display': 'inline-block',
+                    'verticalAlign': 'middle',
+                    'textAlign': 'left'
+                }),
             ], style={'marginBottom': '20px', 'textAlign': 'center'}),
         ], style={'marginBottom': '20px'}),
 
@@ -798,7 +846,8 @@ app.layout = html.Div([
     create_header(),
     create_input_section(),
     create_code_section(),
-    dcc.Interval(id='interval-timer', interval=15000, n_intervals=0, disabled=True),
+    dcc.Interval(id='interval-timer', interval=15000, n_intervals=0, disabled=True),  # 15 seconds for data generation
+    dcc.Interval(id='countdown-timer', interval=1000, n_intervals=0, disabled=True),   # 1 second for countdown
     # Add hidden div for initial state check
     html.Div(id='initial-state-trigger', style={'display': 'none'})
 ], style={
@@ -807,7 +856,43 @@ app.layout = html.Div([
     'padding': '40px 20px'
 })
 
-# Callbacks
+# Add callback for countdown timer
+@app.callback(
+    [Output('status-display', 'children', allow_duplicate=True),
+     Output('countdown-timer', 'disabled')],
+    Input('countdown-timer', 'n_intervals'),
+    prevent_initial_call=True
+)
+def update_countdown(n_intervals):
+    with status["lock"]:
+        if not status["running"] or not status["start_time"]:
+            return dash.no_update, True
+        
+        # Calculate remaining time
+        duration_seconds = status["duration_hours"] * 3600
+        elapsed_time = time.time() - status['start_time']
+        remaining_seconds = duration_seconds - elapsed_time
+        
+        if remaining_seconds <= 0:
+            stop_generation_thread()
+            return f"Generation stopped after {status['duration_hours']} hours.", True
+        
+        # Calculate remaining time in hours, minutes, and seconds
+        remaining_hours = int(remaining_seconds // 3600)
+        remaining_minutes = int((remaining_seconds % 3600) // 60)
+        remaining_secs = int(remaining_seconds % 60)
+        
+        # Format the remaining time message
+        time_message = f"Generating files for '{status['industry']}'... (Time remaining: "
+        if remaining_hours > 0:
+            time_message += f"{remaining_hours}h "
+        if remaining_minutes > 0 or remaining_hours > 0:
+            time_message += f"{remaining_minutes}m "
+        time_message += f"{remaining_secs}s)"
+        
+        return time_message, False
+
+# Update the control generation callback to handle interval timer
 @app.callback(
     [Output('interval-timer', 'disabled'),
      Output('status-display', 'children'),
@@ -816,7 +901,8 @@ app.layout = html.Div([
      Output('control-button', 'disabled'),
      Output('dlt-code-display', 'children'),
      Output('dlt-code-section', 'style'),
-     Output('export-button-container', 'style')],
+     Output('export-button-container', 'style'),
+     Output('countdown-timer', 'disabled', allow_duplicate=True)],
     [Input('control-button', 'n_clicks'),
      Input('interval-timer', 'n_intervals')],
     [State('language-dropdown', 'value'),
@@ -824,11 +910,12 @@ app.layout = html.Div([
      State('path-input', 'value'),
      State('dlt-output-dropdown', 'value'),
      State('dlt-mode-dropdown', 'value'),
+     State('duration-input', 'value'),
      State('dlt-code-section', 'style'),
      State('dlt-code-display', 'children')],
     prevent_initial_call=True
 )
-def control_generation(button_clicks, n_intervals, selected_language, selected_industry, path_input, selected_dlt_output, selected_dlt_mode, current_section_style, current_display):
+def control_generation(button_clicks, n_intervals, selected_language, selected_industry, path_input, selected_dlt_output, selected_dlt_mode, duration_hours, current_section_style, current_display):
     global dimension_key_ranges, status
     
     ctx = dash.callback_context
@@ -852,6 +939,8 @@ def control_generation(button_clicks, n_intervals, selected_language, selected_i
             status["selected_dlt_output"] = selected_dlt_output
         if selected_dlt_mode:
             status["selected_dlt_mode"] = selected_dlt_mode
+        if duration_hours:
+            status["duration_hours"] = duration_hours
 
     # Default section style
     section_style = current_section_style if current_section_style else {**STYLES['container'], 'display': 'none'}
@@ -876,31 +965,37 @@ def control_generation(button_clicks, n_intervals, selected_language, selected_i
                 return True, html.Div([
                     html.Span("⚠️ Please enter a path to the volume.", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
             
             if not selected_industry:
                 return True, html.Div([
                     html.Span("⚠️ Please select an industry.", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
             
             if not selected_language:
                 return True, html.Div([
                     html.Span("⚠️ Please select a language.", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
 
             if not selected_dlt_output:
                 return True, html.Div([
                     html.Span("⚠️ Please select medallion layers for DLT Output.", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
 
             if not selected_dlt_mode:
                 return True, html.Div([
                     html.Span("⚠️ Please select a DLT Mode.", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
+
+            if not duration_hours or duration_hours < 1 or duration_hours > 24:
+                return True, html.Div([
+                    html.Span("⚠️ Please enter a valid duration between 1 and 24 hours.", 
+                             style={'color': '#FF3621'})
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
 
             try:
                 print("\nStarting generation...")
@@ -917,12 +1012,12 @@ def control_generation(button_clicks, n_intervals, selected_language, selected_i
                 start_generation_thread()
                 
                 section_style['display'] = 'block'
-                return False, f"Generating files for '{selected_industry}'...", "Stop", stop_style, False, loading_message, section_style, export_button_style
+                return False, f"Generating files for '{selected_industry}'...", "Stop", stop_style, False, loading_message, section_style, export_button_style, False
             except Exception as e:
                 return True, html.Div([
                     html.Span(f"⚠️ {str(e)}", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, False, None, section_style, export_button_style
+                ], style={'padding': '12px'}), "Start", start_style, False, None, section_style, export_button_style, True
         else:  # Stop button was clicked
             print("\nStopping generation...")
             # Disable button immediately and update UI
@@ -944,36 +1039,17 @@ def control_generation(button_clicks, n_intervals, selected_language, selected_i
             section_style['display'] = 'none'
             export_button_style['display'] = 'none'
             
-            # Force UI update with current DLT code if available
-            final_display = None
-            if status['dlt_code']:
-                try:
-                    final_display = create_dlt_code_display(status['dlt_code'], selected_language)
-                except Exception as e:
-                    logger.error(f"Error creating final display: {str(e)}")
-                    final_display = None
-            
-            return True, "Stopped.", "Start", start_style, False, final_display, section_style, export_button_style
+            return True, "Stopped.", "Start", start_style, False, None, section_style, export_button_style, True
 
     elif trigger == 'interval-timer':
         with status["lock"]:
-            if not status["running"] or not status["industry"]:
+            if not status["running"]:
                 # If generation is not running, disable the interval timer and reset state
                 stop_generation_thread()  # Ensure thread is stopped
-                return True, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
-            
-            if status['start_time'] and (time.time() - status['start_time']) > 3600:  # 1 hour limit
-                print("\nTime limit reached...")
-                stop_generation_thread()
-                
-                # Reset UI state
-                section_style['display'] = 'none'
-                export_button_style['display'] = 'none'
-                
-                return True, "Generation stopped after 1 hour.", "Start", start_style, False, None, section_style, export_button_style
+                return True, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, True
             
             # Check if DLT code needs to be generated
-            if status['iteration_count'] == 1 and status['dlt_code'] is None:
+            if status['dlt_code'] is None:
                 print("\nGenerating DLT code...")
                 try:
                     schemas = load_all_schemas(status["industry"])
@@ -994,19 +1070,19 @@ def control_generation(button_clicks, n_intervals, selected_language, selected_i
                     print(f"Stored DLT code: {status['dlt_code'] is not None}")
                     section_style['display'] = 'block'
                     export_button_style['display'] = 'block'
-                    return False, f"Generating files for '{status['industry']}'...", "Stop", stop_style, False, create_dlt_code_display(dlt_codes, selected_language), section_style, export_button_style
+                    return False, dash.no_update, "Stop", stop_style, False, create_dlt_code_display(dlt_codes, selected_language), section_style, export_button_style, False
                 except Exception as e:
                     print(f"Error generating DLT code: {str(e)}")
                     section_style['display'] = 'block'
                     export_button_style['display'] = 'none'
-                    return False, f"Generating files for '{status['industry']}'...", "Stop", stop_style, False, loading_message, section_style, export_button_style
+                    return False, dash.no_update, "Stop", stop_style, False, loading_message, section_style, export_button_style, False
             
             print("\nSubsequent iteration - using stored code")
             section_style['display'] = 'block'
             export_button_style['display'] = 'block'
             if status['dlt_code'] is None:
-                return False, f"Generating files for '{status['industry']}'...", "Stop", stop_style, False, loading_message, section_style, export_button_style
-            return False, f"Generating files for '{status['industry']}'...", "Stop", stop_style, False, create_dlt_code_display(status['dlt_code'], selected_language), section_style, export_button_style
+                return False, dash.no_update, "Stop", stop_style, False, loading_message, section_style, export_button_style, False
+            return False, dash.no_update, "Stop", stop_style, False, create_dlt_code_display(status['dlt_code'], selected_language), section_style, export_button_style, False
 
     raise dash.exceptions.PreventUpdate
 
@@ -1047,7 +1123,8 @@ def update_export_button(code_display):
      Output('industry-dropdown', 'value'),
      Output('path-input', 'value'),
      Output('dlt-output-dropdown', 'value'),
-     Output('dlt-mode-dropdown', 'value')],
+     Output('dlt-mode-dropdown', 'value'),
+     Output('duration-input', 'value')],
     Input('initial-state-trigger', 'children'),
     prevent_initial_call=False  # Allow initial call
 )
@@ -1061,9 +1138,37 @@ def trigger_initial_state_check(_):
                 status["selected_industry"],
                 status["path_input"],
                 status["selected_dlt_output"],
-                status["selected_dlt_mode"]
+                status["selected_dlt_mode"],
+                status["duration_hours"]
             ]
-        return ['triggered', '', '', '', '', '']
+        return ['triggered', '', '', '', '', '', 4]  # Default duration to 4 hours
+
+# Add UI state sync callback
+@app.callback(
+    [Output('control-button', 'children', allow_duplicate=True),
+     Output('control-button', 'style', allow_duplicate=True),
+     Output('dlt-code-section', 'style', allow_duplicate=True),
+     Output('export-button-container', 'style', allow_duplicate=True)],
+    [Input('initial-state-trigger', 'children')],
+    prevent_initial_call='initial_duplicate'
+)
+def sync_ui_state(_):
+    """Sync UI elements with server state on page load."""
+    # Button styles
+    start_style = {**STYLES['button'], 'backgroundColor': DB_COLORS['success']}
+    stop_style = {**STYLES['button'], 'backgroundColor': DB_COLORS['primary']}
+    
+    # Default section style
+    section_style = {**STYLES['container'], 'display': 'none'}
+    export_button_style = {'textAlign': 'center', 'display': 'none'}
+    
+    with status["lock"]:
+        if status["running"]:
+            section_style['display'] = 'block'
+            export_button_style['display'] = 'block'
+            return "Stop", stop_style, section_style, export_button_style
+        else:
+            return "Start", start_style, section_style, export_button_style
 
 # Add separate callback for language dropdown
 @app.callback(
