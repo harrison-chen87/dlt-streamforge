@@ -1,0 +1,34 @@
+table: calibration_records
+type: fact
+num_rows: 500
+generator_config:
+  start_date: "2020-01-01"  # Standardized start date
+  end_date: "now"           # Up to current date
+columns:
+  calibration_id: int
+  asset_id: int
+  inspector_id: int
+  calibration_date: datetime
+  next_calibration_date: datetime
+  calibration_type:
+    type: string
+    format: "FULL|ZERO|SPAN|LINEARITY"
+  pre_calibration_reading: 
+    type: float
+  post_calibration_reading:
+    type: float
+  drift_percentage:
+    type: float
+  calibration_status:
+    type: string
+    format: "PASSED|FAILED|ADJUSTED"
+  calibration_standard:
+    type: string
+    format: "STD-####"
+  notes:
+    type: string
+data_quality_rules:
+  drift_percentage:
+    min_value: 0
+    max_value: 100
+    anomaly_percentage: 0.05 

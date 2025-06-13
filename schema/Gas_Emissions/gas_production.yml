@@ -1,0 +1,32 @@
+table: gas_production
+type: fact
+num_rows: 1000
+generator_config:
+  start_date: "2020-01-01"  # Standardized start date
+  end_date: "now"           # Up to current date
+columns:
+  production_id: int
+  site_id: int
+  asset_id: int
+  timestamp: datetime
+  gas_volume_m3:
+    type: float
+  gas_pressure:
+    type: float
+  gas_temperature:
+    type: float
+  gas_quality:
+    type: string
+    format: "HIGH|MEDIUM|LOW"
+  production_status:
+    type: string
+    format: "NORMAL|REDUCED|STOPPED"
+data_quality_rules:
+  gas_volume_m3:
+    min_value: 0
+    max_value: 10000
+    anomaly_percentage: 0.03
+  gas_pressure:
+    min_value: 0
+    max_value: 500
+    anomaly_percentage: 0.02 

@@ -1,0 +1,36 @@
+table: alert_history
+type: fact
+num_rows: 1000
+generator_config:
+  start_date: "2020-01-01"  # Standardized start date
+  end_date: "now"           # Up to current date
+columns:
+  alert_id: int
+  asset_id: int
+  site_id: int
+  emission_id: int
+  alert_timestamp: datetime
+  alert_type:
+    type: string
+    format: "THRESHOLD|MALFUNCTION|CALIBRATION|COMPLIANCE"
+  severity:
+    type: string
+    format: "LOW|MEDIUM|HIGH|CRITICAL"
+  threshold_value: 
+    type: float
+  measured_value:
+    type: float
+  resolution_timestamp:
+    type: datetime
+  resolution_action:
+    type: string
+    format: "MAINTENANCE|CALIBRATION|SHUTDOWN|ADJUSTMENT"
+  inspector_id:
+    type: int
+  notes:
+    type: string
+data_quality_rules:
+  threshold_value:
+    min_value: 0
+    max_value: 1000
+    anomaly_percentage: 0.03 

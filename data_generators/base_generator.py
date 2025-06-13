@@ -3,39 +3,21 @@ import pandas as pd
 import os
 from datetime import datetime
 import tempfile
-from flask import request
 import logging
 import random
 
 logger = logging.getLogger(__name__)
 
 class BaseGenerator(ABC):
-    def __init__(self, schema_path, output_base_path):
+    def __init__(self, schema_path, output_base_path, is_local=True):
         self.schema_path = schema_path
         self.output_base_path = output_base_path
+        self.is_local = is_local
         self.schema = self._load_schema()
         
     def _is_local_env(self):
-        """Check if running in local environment by checking request headers."""
-        try:
-            # Get the actual URL from request headers
-            host = request.headers.get('X-Forwarded-Host', request.host)
-            referer = request.headers.get('Referer', '')
-            
-            logger.info(f"Detected host: {host}")
-            logger.info(f"Detected referer: {referer}")
-            
-            # Check if we're running on Databricks domain
-            is_databricks = any([
-                'databricks' in host,
-                'databricks' in referer
-            ])
-            
-            logger.info(f"Environment detection result: {'Databricks' if is_databricks else 'Local'}")
-            return not is_databricks
-        except Exception as e:
-            logger.info(f"Error during environment detection - defaulting to local. Error: {str(e)}")
-            return True
+        """Check if running in local environment."""
+        return self.is_local
         
     def _load_schema(self):
         """Load schema from YAML file."""
@@ -146,12 +128,17 @@ class BaseGenerator(ABC):
     
     def _generate_value(self, col, col_def):
         """Base method for generating values based on data type."""
-        if isinstance(col_def, str):
-            dtype = col_def
-            format_spec = None
-        else:
+        # Check for null probability first
+        if isinstance(col_def, dict):
+            null_prob = col_def.get('null_probability', 0.0)
+            if random.random() < null_prob:
+                return None
+            
             dtype = col_def.get('type', 'string')
             format_spec = col_def.get('format')
+        else:
+            dtype = col_def
+            format_spec = None
             
         col_lower = col.lower()
         
@@ -175,6 +162,8 @@ class BaseGenerator(ABC):
                     return result
             elif 'name' in col_lower:
                 return self.fake.name()
+            elif 'email' in col_lower:
+                return self.fake.email()
             elif 'address' in col_lower:
                 return self.fake.address()
             elif 'city' in col_lower:
@@ -183,11 +172,8 @@ class BaseGenerator(ABC):
                 return self.fake.state()
             elif 'zip' in col_lower:
                 return self.fake.zipcode()
-            elif 'contact' in col_lower and 'number' in col_lower:
-                # Generate a standard 10-digit phone number
+            elif ('contact' in col_lower or 'phone' in col_lower) and 'number' in col_lower:
                 return f"({self.fake.random_number(digits=3)}) {self.fake.random_number(digits=3)}-{self.fake.random_number(digits=4)}"
-            elif 'email' in col_lower:
-                return self.fake.email()
             else:
                 return self.fake.word().title()
         elif dtype == 'datetime':
