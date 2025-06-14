@@ -179,7 +179,8 @@ class BaseGenerator(ABC):
             dtype = col_def.get('type', 'string')
             format_spec = col_def.get('format')
         else:
-            dtype = col_def
+            # Handle simple type definitions (e.g., "string", "int", etc.)
+            dtype = str(col_def).lower()  # Convert to lowercase string
             format_spec = None
             
         col_lower = col.lower()
@@ -202,6 +203,15 @@ class BaseGenerator(ABC):
                     while '#' in result:
                         result = result.replace('#', str(random.randint(0, 9)), 1)
                     return result
+                elif '?' in format_spec:
+                    # Handle formats with question marks for random letters
+                    result = format_spec
+                    while '?' in result:
+                        result = result.replace('?', random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 1)
+                    return result
+                else:
+                    # Simple catch-all: return format as-is
+                    return format_spec
             elif 'name' in col_lower:
                 return self.fake.name()
             elif 'email' in col_lower:
@@ -221,7 +231,10 @@ class BaseGenerator(ABC):
         elif dtype == 'datetime':
             return self.fake.date_time().isoformat()
             
-        raise ValueError(f"Unsupported data type: {dtype}")
+        error_msg = f"Unsupported data type: {dtype}"
+        if format_spec:
+            error_msg += f" with format: {format_spec}"
+        raise ValueError(error_msg)
     
     @abstractmethod
     def generate_data(self):
