@@ -21,6 +21,7 @@ wheels/
 *.egg
 .env
 resource_ids.json
+**/.env
 infrastructure/.env
 
 # Virtual Environment
