@@ -1,0 +1,24 @@
+table: asset
+type: dimension
+num_rows: 200
+columns:
+  asset_id: int
+  site_id: int
+  asset_name:
+    type: string
+    format: "EQ-####"
+  asset_type:
+    type: string
+    format: "VALVE|COMPRESSOR|SENSOR|PUMP|TANK"
+  manufacturer:
+    type: string
+    format: "MAN-####"
+  model_number:
+    type: string
+    format: "MOD-####"
+  installation_date: datetime
+  last_inspection_date: datetime
+  operational_status:
+    type: string
+    format: "OPERATIONAL|MAINTENANCE|OFFLINE"
+  warranty_expiry: datetime 

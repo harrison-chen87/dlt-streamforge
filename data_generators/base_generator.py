@@ -3,45 +3,31 @@ import pandas as pd
 import os
 from datetime import datetime
 import tempfile
-from flask import request
 import logging
 import random
 
 logger = logging.getLogger(__name__)
 
 class BaseGenerator(ABC):
-    def __init__(self, schema_path, output_base_path):
+    def __init__(self, schema_path, output_base_path, is_local=True):
         self.schema_path = schema_path
         self.output_base_path = output_base_path
+        self.is_local = is_local
         self.schema = self._load_schema()
         
     def _is_local_env(self):
-        """Check if running in local environment by checking request headers."""
-        try:
-            # Get the actual URL from request headers
-            host = request.headers.get('X-Forwarded-Host', request.host)
-            referer = request.headers.get('Referer', '')
-            
-            logger.info(f"Detected host: {host}")
-            logger.info(f"Detected referer: {referer}")
-            
-            # Check if we're running on Databricks domain
-            is_databricks = any([
-                'databricks' in host,
-                'databricks' in referer
-            ])
-            
-            logger.info(f"Environment detection result: {'Databricks' if is_databricks else 'Local'}")
-            return not is_databricks
-        except Exception as e:
-            logger.info(f"Error during environment detection - defaulting to local. Error: {str(e)}")
-            return True
+        """Check if running in local environment."""
+        return self.is_local
         
     def _load_schema(self):
         """Load schema from YAML file."""
         import yaml
         logger.info(f"Loading schema from: {self.schema_path}")
         
+        # If schema_path is None, return an empty schema (used for cleanup operations)
+        if self.schema_path is None:
+            return {"table": "temp", "columns": []}
+            
         try:
             with open(self.schema_path) as f:
                 return yaml.safe_load(f)
@@ -68,25 +54,63 @@ class BaseGenerator(ABC):
             return f"{table_dir}/data_{timestamp}.csv"
     
     def _check_directory_empty(self, directory):
-        """Check if directory is empty in both local and Databricks environments."""
+        """Check if directory is empty and clean it up if needed."""
         if self._is_local_env():
-            # Local environment check
+            # Local environment check and cleanup
             if os.path.exists(directory):
                 if os.listdir(directory):
-                    raise ValueError(f"Directory {directory} is not empty. Please clear the directory before generating new data.")
+                    logger.info(f"Directory {directory} is not empty. Cleaning up...")
+                    try:
+                        import shutil
+                        shutil.rmtree(directory)
+                        logger.info(f"Successfully cleaned up directory: {directory}")
+                    except Exception as e:
+                        logger.error(f"Error cleaning up directory {directory}: {str(e)}")
+                        raise
+            else:
+                logger.info(f"Directory {directory} does not exist - will be created when needed")
         else:
-            # Databricks environment check
+            # Databricks environment check and cleanup
             from databricks.sdk import WorkspaceClient
             workspace = WorkspaceClient()
+            
+            # Remove trailing slash for directory operations
+            directory = directory.rstrip('/')
+            
+            def delete_directory_recursive(dir_path):
+                """Recursively delete a directory and its contents."""
+                try:
+                    # List contents of the directory
+                    contents = list(workspace.files.list_directory_contents(dir_path))
+                    if contents:
+                        for item in contents:
+                            if item.is_directory:
+                                # Recursively delete subdirectories
+                                delete_directory_recursive(item.path)
+                            else:
+                                # Delete files
+                                workspace.files.delete(item.path)
+                        # Delete the empty directory
+                        workspace.files.delete_directory(dir_path)
+                        logger.info(f"Successfully cleaned up directory: {dir_path}")
+                except Exception as e:
+                    if "not found" not in str(e).lower():
+                        logger.error(f"Error cleaning up directory {dir_path}: {str(e)}")
+                        raise
+            
             try:
-                # List files in the directory
-                files = workspace.files.list(directory)
-                if files and len(files) > 0:
-                    raise ValueError(f"Directory {directory} is not empty. Please clear the directory before generating new data.")
+                # Check if directory exists and has contents
+                contents = list(workspace.files.list_directory_contents(directory))
+                if contents:
+                    logger.info(f"Directory {directory} is not empty. Cleaning up...")
+                    delete_directory_recursive(directory)
             except Exception as e:
                 # If directory doesn't exist, that's fine - it will be created
-                if "does not exist" not in str(e):
-                    raise e
+                if "not found" in str(e).lower():
+                    logger.info(f"Directory {directory} does not exist - will be created when needed")
+                else:
+                    logger.error(f"Unexpected error checking directory {directory}: {str(e)}")
+                    raise
     
     def _save_to_databricks(self, df, output_path):
         """Save data to Databricks UC volume using SDK."""
@@ -146,12 +170,18 @@ class BaseGenerator(ABC):
     
     def _generate_value(self, col, col_def):
         """Base method for generating values based on data type."""
-        if isinstance(col_def, str):
-            dtype = col_def
-            format_spec = None
-        else:
+        # Check for null probability first
+        if isinstance(col_def, dict):
+            null_prob = col_def.get('null_probability', 0.0)
+            if random.random() < null_prob:
+                return None
+            
             dtype = col_def.get('type', 'string')
             format_spec = col_def.get('format')
+        else:
+            # Handle simple type definitions (e.g., "string", "int", etc.)
+            dtype = str(col_def).lower()  # Convert to lowercase string
+            format_spec = None
             
         col_lower = col.lower()
         
@@ -173,8 +203,19 @@ class BaseGenerator(ABC):
                     while '#' in result:
                         result = result.replace('#', str(random.randint(0, 9)), 1)
                     return result
+                elif '?' in format_spec:
+                    # Handle formats with question marks for random letters
+                    result = format_spec
+                    while '?' in result:
+                        result = result.replace('?', random.choice('ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 1)
+                    return result
+                else:
+                    # Simple catch-all: return format as-is
+                    return format_spec
             elif 'name' in col_lower:
                 return self.fake.name()
+            elif 'email' in col_lower:
+                return self.fake.email()
             elif 'address' in col_lower:
                 return self.fake.address()
             elif 'city' in col_lower:
@@ -183,17 +224,17 @@ class BaseGenerator(ABC):
                 return self.fake.state()
             elif 'zip' in col_lower:
                 return self.fake.zipcode()
-            elif 'contact' in col_lower and 'number' in col_lower:
-                # Generate a standard 10-digit phone number
+            elif ('contact' in col_lower or 'phone' in col_lower) and 'number' in col_lower:
                 return f"({self.fake.random_number(digits=3)}) {self.fake.random_number(digits=3)}-{self.fake.random_number(digits=4)}"
-            elif 'email' in col_lower:
-                return self.fake.email()
             else:
                 return self.fake.word().title()
         elif dtype == 'datetime':
             return self.fake.date_time().isoformat()
             
-        raise ValueError(f"Unsupported data type: {dtype}")
+        error_msg = f"Unsupported data type: {dtype}"
+        if format_spec:
+            error_msg += f" with format: {format_spec}"
+        raise ValueError(error_msg)
     
     @abstractmethod
     def generate_data(self):

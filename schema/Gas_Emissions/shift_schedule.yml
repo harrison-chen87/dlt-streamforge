@@ -1,0 +1,26 @@
+table: shift_schedule
+type: fact
+num_rows: 1000
+columns:
+  shift_id: int
+  site_id: int
+  inspector_id: int
+  shift_start: datetime
+  shift_end:
+    type: datetime
+    null_probability: 0.02
+  shift_type:
+    type: string
+    format: "MORNING|AFTERNOON|NIGHT"
+  role:
+    type: string
+    format: "SUPERVISOR|OPERATOR|TECHNICIAN"
+  area_assigned:
+    type: string
+    format: "AREA-####"
+  handover_notes:
+    type: string
+    null_probability: 0.05
+  status:
+    type: string
+    format: "SCHEDULED|IN_PROGRESS|COMPLETED|CANCELLED"

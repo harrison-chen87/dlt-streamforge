@@ -1,0 +1,57 @@
+table: sensor_emissions
+type: fact
+num_rows: 100000
+generator_config:
+  start_date: "2020-01-01"  # Standardized start date
+  end_date: "now"           # Up to current date
+columns:
+  emission_id: int
+  asset_id: int
+  site_id: int
+  timestamp: datetime
+  methane_level:
+    type: float
+    null_probability: 0.02
+  co2_level:
+    type: float
+    null_probability: 0.03
+  nox_level:
+    type: float
+    null_probability: 0.04
+  temperature:
+    type: float
+    null_probability: 0.01
+  pressure:
+    type: float
+    null_probability: 0.02
+  flow_rate:
+    type: float
+    null_probability: 0.03
+  alert_status:
+    type: string
+    format: "NORMAL|WARNING|CRITICAL"
+data_quality_rules:
+  methane_level:
+    min_value: 0
+    max_value: 1000
+    anomaly_percentage: 0.05
+  co2_level:
+    min_value: 0
+    max_value: 1000
+    anomaly_percentage: 0.01
+  nox_level:
+    min_value: 0
+    max_value: 1000
+    anomaly_percentage: 0.02
+  temperature:
+    min_value: -20
+    max_value: 100
+    anomaly_percentage: 0.05
+  pressure:
+    min_value: 0
+    max_value: 1000
+    anomaly_percentage: 0.03
+  flow_rate:
+    min_value: 0
+    max_value: 10000
+    anomaly_percentage: 0.05 

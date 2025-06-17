@@ -1,0 +1,20 @@
+table: inspectors
+type: dimension
+num_rows: 50
+columns:
+  inspector_id: int
+  inspector_name:
+    type: string
+    format: "INSP-####"
+  certification_level:
+    type: string
+    format: "LEVEL-#"
+  specialization:
+    type: string
+    format: "GAS|ELECTRICAL|MECHANICAL|INSTRUMENTATION"
+  contact_number: string
+  email: string
+  hire_date: datetime
+  status:
+    type: string
+    format: "ACTIVE|INACTIVE|ON_LEAVE" 

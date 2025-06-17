@@ -21,6 +21,16 @@ A Python-based data generation tool for creating realistic streaming data pipeli
   - Support for streaming tables and views
   - SCD Type 2 implementation for change feeds
   - Exportable as Jupyter notebooks
+  - Flexible medallion architecture options (Bronze only or Bronze + Silver)
+  - Two DLT modes: Full Code and Workshop Mode
+
+- **Continuous Data Generation**:
+  - Simulates real-time data streaming by continuously generating files
+  - Configurable duration (1-24 hours) with countdown timer
+  - Maintains referential integrity across dimension and fact tables
+  - Generates new data every 15 seconds
+  - Automatic cleanup when duration expires
+  - Persistent UI state during page reloads
 
 ## Prerequisites
 
@@ -69,10 +79,40 @@ pip install -r requirements.txt
    ```
 
 3. **Generate Data**:
+   - Enter a volume or directory path to stream the generated data model files
    - Select your industry
    - Choose output language (SQL/Python)
-   - Enter an empty output path (directory must be empty)
+   - Select medallion layers (Bronze only or Bronze + Silver)
+   - Choose DLT mode (Full Code or Workshop Mode)
+   - Set duration in hours (1-24, default: 4)
    - Click "Start" to begin generation
+
+   The application will:
+   - Generate initial dimension tables and DLT code
+   - Continuously generate new fact and change feed data every 15 seconds
+   - Maintain referential integrity with dimension tables
+   - Show countdown timer with remaining time
+   - Continue until either:
+     * You click the "Stop" button
+     * The configured duration expires
+   - Automatically stop and clean up resources when finished
+   - Maintain UI state consistency during page reloads
+
+### DLT Generation Options
+
+1. **Medallion Layers**:
+   - **Bronze Only**: Generates DLT code for raw data ingestion only
+   - **Bronze + Silver**: Generates DLT code for both raw data ingestion and quality-enriched tables
+
+2. **DLT Modes**:
+   - **Full Code**: Generates complete, production-ready DLT code
+   - **Workshop Mode**: Generates code with placeholders for educational purposes
+
+3. **Duration Control**:
+   - Set generation duration between 1 and 24 hours
+   - Real-time countdown timer shows remaining time
+   - Automatic cleanup when duration expires
+   - UI state persists during page reloads
 
 ## Schema Configuration
 
@@ -141,6 +181,8 @@ The tool generates:
 1. CSV files for each table
 2. DLT pipeline code in SQL and Python
 3. Jupyter notebook with complete pipeline code
+   - Provides guidance on replacing placeholders in Workshop Mode
+   - Contains links to relevant Databricks documentation
 
 ## Deployment
 

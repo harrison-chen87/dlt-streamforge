@@ -5,8 +5,18 @@ import yaml
 import time
 import json
 import logging
-from data_generators import DimensionGenerator, FactGenerator, ChangeFeedGenerator, BaseGenerator
+from data_generators import (
+    DimensionGenerator, 
+    FactGenerator, 
+    ChangeFeedGenerator, 
+    BaseGenerator,
+    WeatherGenerator
+)
 from dash.dependencies import ClientsideFunction
+from threading import Thread
+import threading
+from flask import jsonify
+from infrastructure.resource_manager import ResourceManager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -15,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Constants
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SCHEMA_BASE_PATH = os.path.join(APP_DIR, "schema")
+INFRASTRUCTURE_PATH = os.path.join(APP_DIR, "infrastructure")
 
 # Theme configuration
 DB_COLORS = {
@@ -73,12 +84,128 @@ status = {
     "iteration_count": 0,
     "start_time": None,
     "dlt_code": None,
-    "output_path": None
+    "output_path": None,
+    "thread": None,
+    "lock": threading.Lock(),
+    "selected_language": None,
+    "selected_industry": None,
+    "path_input": None,
+    "selected_dlt_output": None,
+    "selected_dlt_mode": None,
+    "duration_hours": 8,  # Default to 8 hours
+    "resource_manager": None,
+    "resources_created": False
 }
+
+# Initialize resource manager
+def init_resource_manager():
+    """Initialize the resource manager with default configuration."""
+    config_path = os.path.join(INFRASTRUCTURE_PATH, "config.json")
+    return ResourceManager(config_path=config_path if os.path.exists(config_path) else None)
 
 # Initialize Dash app
 app = dash.Dash(__name__)
 server = app.server
+
+# Add resource management endpoints
+@app.server.route('/api/resources/create', methods=['POST'])
+def create_resources():
+    """Endpoint to create Databricks resources."""
+    try:
+        if not status["resource_manager"]:
+            status["resource_manager"] = init_resource_manager()
+        
+        resource_ids = status["resource_manager"].create_resources()
+        status["resources_created"] = True
+        return jsonify({"status": "success", "resource_ids": resource_ids})
+    except Exception as e:
+        logger.error(f"Error creating resources: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.server.route('/api/resources/cleanup', methods=['POST'])
+def cleanup_resources():
+    """Endpoint to clean up Databricks resources."""
+    try:
+        if status["resource_manager"]:
+            status["resource_manager"].cleanup_resources()
+            status["resources_created"] = False
+            return jsonify({"status": "success"})
+        return jsonify({"status": "error", "message": "No resources to clean up"}), 404
+    except Exception as e:
+        logger.error(f"Error cleaning up resources: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.server.route('/api/resources/status', methods=['GET'])
+def get_resources_status():
+    """Endpoint to check resource creation status."""
+    return jsonify({
+        "resources_created": status["resources_created"],
+        "has_resource_manager": status["resource_manager"] is not None
+    })
+
+
+def generation_service():
+    """Background service that runs file generation."""
+    while status["running"]:
+        try:
+            with status["lock"]:
+                if not status["running"]:
+                    break
+                generate_files_for_industry(status["industry"])
+        except Exception as e:
+            logger.error(f"Error in generation service: {str(e)}")
+            with status["lock"]:
+                status["running"] = False
+                status["thread"] = None
+            break
+        time.sleep(15)  # Wait 15 seconds between iterations
+
+def start_generation_thread():
+    """Start the generation thread if it's not already running."""
+    with status["lock"]:
+        if status["thread"] is None:
+            status["running"] = True  # Set running state before starting thread
+            status["thread"] = Thread(target=generation_service)
+            status["thread"].start()
+            print("Started generation thread, running state:", status["running"])  # Debug log
+
+def stop_generation_thread():
+    """Stop the generation thread if it's running."""
+    with status["lock"]:
+        if status["thread"]:
+            print("Stopping background thread...")
+            status["running"] = False
+            status["thread"].join(timeout=5)  # Wait up to 5 seconds for thread to finish
+            status["thread"] = None
+            # Reset all state
+            status["industry"] = None
+            status["iteration_count"] = 0
+            status["start_time"] = None
+            status["dlt_code"] = None
+            status["output_path"] = None
+            # Don't reset selected_language, selected_industry, path_input, and selected_dlt_output
+            # as they are UI state that should persist
+            print("Background thread stopped and state reset")
+
+# Add state endpoint
+@app.server.route('/api/state')
+def get_state():
+    """Endpoint to check the current state."""
+    with status["lock"]:
+        state = {
+            "running": status["running"],
+            "industry": status["industry"],
+            "iteration_count": status["iteration_count"],
+            "dlt_code": status["dlt_code"],
+            "selected_language": status["selected_language"],
+            "selected_industry": status["selected_industry"],
+            "path_input": status["path_input"],
+            "selected_dlt_output": status["selected_dlt_output"],
+            "selected_dlt_mode": status["selected_dlt_mode"],
+            "duration_hours": status["duration_hours"]
+        }
+        print("Returning state:", state)  # Add debug logging
+        return jsonify(state)
 
 # Add custom CSS for Inter font and Font Awesome
 app.index_string = '''
@@ -135,6 +262,25 @@ def generate_dlt_references(schema, output_path, table_type):
     quality_constraints = []
     if table_type in ['fact', 'dimension'] and 'data_quality_rules' in schema:
         for column, rules in schema['data_quality_rules'].items():
+            # Handle NOT NULL constraints
+            if rules.get('not_null'):
+                constraint_name = f"not_null_{column}"
+                constraint_condition = f"{column} IS NOT NULL"
+                
+                # Validate action is one of the allowed values
+                action = rules.get('action', 'warn').lower()
+                if action not in ['warn', 'drop', 'fail']:
+                    logger.warning(f"Invalid action '{action}' for column {column}. Defaulting to 'warn'.")
+                    action = 'warn'
+                
+                quality_constraints.append({
+                    'name': constraint_name,
+                    'condition': constraint_condition,
+                    'description': rules.get('description', f'{column} should not be null'),
+                    'action': action
+                })
+            
+            # Handle min/max value constraints
             if 'min_value' in rules and 'max_value' in rules:
                 constraint_name = f"valid_{column}"
                 constraint_condition = f"{column} BETWEEN {rules['min_value']} AND {rules['max_value']}"
@@ -152,6 +298,12 @@ def generate_dlt_references(schema, output_path, table_type):
                     'action': action
                 })
     
+    # Helper function to get table comment based on mode
+    def get_table_comment(layer, table_name, table_type):
+        if status["selected_dlt_mode"] == "full_code":
+            return f"{layer} Streaming Table for {table_name} ({table_type})"
+        return "<CHANGE_HERE: enter_table_comment>"
+    
     if table_type == "change_feed":
         # Get DLT configuration from schema
         dlt_config = schema.get("change_feed_rules", {}).get("dlt_config", {})
@@ -161,80 +313,115 @@ def generate_dlt_references(schema, output_path, table_type):
         # SQL DLT code for change feed - using full catalog.schema format for change feeds
         sql_code = f'''
 -- Create streaming table for raw data
-CREATE OR REFRESH STREAMING TABLE <CHANGE_HERE: catalog>.<CHANGE_HERE: schema>.{table_name}_base
-AS SELECT * FROM STREAM read_files("{output_path}/", format => "csv")
-COMMENT '<CHANGE_HERE: enter_table_comment>';
+CREATE OR REFRESH STREAMING TABLE bronze.{table_name}
+COMMENT '{get_table_comment("Bronze", table_name, "change feed")}'
+AS SELECT * FROM STREAM read_files("{output_path}/", format => "csv", inferColumnTypes => "true", multiLine => "true");
 
 -- Create streaming table
-CREATE OR REFRESH STREAMING TABLE <CHANGE_HERE: catalog>.<CHANGE_HERE: schema>.{table_name}
-COMMENT '<CHANGE_HERE: enter_table_comment>';
+CREATE OR REFRESH STREAMING TABLE silver.{table_name}
+COMMENT '{get_table_comment("Silver", table_name, "change feed")}';
 
 -- Apply changes using SCD
-APPLY CHANGES INTO <CHANGE_HERE: catalog>.<CHANGE_HERE: schema>.{table_name}
-FROM STREAM(<CHANGE_HERE: catalog>.<CHANGE_HERE: schema>.{table_name}_base)
+APPLY CHANGES INTO silver.{table_name}
+FROM STREAM(bronze.{table_name})
 KEYS ({', '.join(keys)})
 SEQUENCE BY {sequence_by}
-STORED AS SCD TYPE <CHANGE_HERE: 1/2>;
+STORED AS SCD TYPE {2 if status["selected_dlt_mode"] == "full_code" else "<CHANGE_HERE: 1/2>"};
 '''
         
         # Python DLT code for change feed - using full catalog.schema format for change feeds
-        python_code = f'''@dlt.table(name="<CHANGE_HERE: catalog>.<CHANGE_HERE: schema>.{table_name}_base")
+        python_code = f'''@dlt.table(name="bronze.{table_name}")
 def source():
     return (spark.readStream
         .format("cloudFiles")
         .option("cloudFiles.format", "csv")
+        .option("cloudFiles.inferColumnTypes", "true")
+        .option("multiLine", "true")
         .load("{output_path}/")
     )
 
 dlt.create_streaming_table(
-    name="<CHANGE_HERE: catalog>.<CHANGE_HERE: schema>.{table_name}",
-    comment="<CHANGE_HERE: enter_table_comment>"
+    name="silver.{table_name}",
+    comment="{get_table_comment("Silver", table_name, "change feed")}"
 )
 
 dlt.apply_changes(
-    target="<CHANGE_HERE: catalog>.<CHANGE_HERE: schema>.{table_name}",
-    source="<CHANGE_HERE: catalog>.<CHANGE_HERE: schema>.{table_name}_base",
+    target="silver.{table_name}",
+    source="bronze.{table_name}",
     keys={keys},
     sequence_by="{sequence_by}",
-    stored_as_scd_type="<CHANGE_HERE: 1/2>"
+    stored_as_scd_type="{2 if status["selected_dlt_mode"] == "full_code" else "<CHANGE_HERE: 1/2>"}"
 )
 '''
-    else:  # fact or dimension - using simpler schema.table format
-        constraint_lines = []
-        for c in quality_constraints:
-            if c['action'] == 'warn':
-                constraint_lines.append(f"CONSTRAINT {c['name']} EXPECT ({c['condition']})")
-            elif c['action'] == 'drop':
-                constraint_lines.append(f"CONSTRAINT {c['name']} EXPECT ({c['condition']}) ON VIOLATION DROP ROW")
-            elif c['action'] == 'fail':
-                constraint_lines.append(f"CONSTRAINT {c['name']} EXPECT ({c['condition']}) ON VIOLATION FAIL UPDATE")
-        constraints_sql = f"(\n{', '.join(constraint_lines)}\n)" if quality_constraints else ""
-        
-        # SQL DLT code for regular tables - using simpler schema.table format
-        sql_code = f'''
-CREATE OR REFRESH STREAMING TABLE <CHANGE_HERE: schema>.{table_name}_bronze{constraints_sql}
-AS SELECT * FROM STREAM read_files("{output_path}/", format => "csv")
-COMMENT '<CHANGE_HERE: enter_table_comment>'
+    else:  # fact or dimension tables
+        # Generate SQL code based on DLT Output selection
+        if status["selected_dlt_output"] == "bronze":
+            # Only bronze table without constraints
+            sql_code = f'''
+CREATE OR REFRESH STREAMING TABLE bronze.{table_name}
+COMMENT '{get_table_comment("Bronze", table_name, table_type)}'
+AS SELECT * FROM STREAM read_files("{output_path}/", format => "csv", inferColumnTypes => "true", multiLine => "true")
 '''
-        
-        # Python DLT code for regular tables - using simpler schema.table format
-        python_constraints = []
-        for c in quality_constraints:
-            if c['action'] == 'warn':
-                python_constraints.append(f'@dlt.expect("{c["name"]}", "{c["condition"]}")')
-            elif c['action'] == 'drop':
-                python_constraints.append(f'@dlt.expect_or_drop("{c["name"]}", "{c["condition"]}")')
-            elif c['action'] == 'fail':
-                python_constraints.append(f'@dlt.expect_or_fail("{c["name"]}", "{c["condition"]}")')
-        
-        python_code = f'''@dlt.table(name="<CHANGE_HERE: schema>.{table_name}_bronze")
-{chr(10).join(python_constraints)}
+            # Python code for bronze only
+            python_code = f'''@dlt.table(name="bronze.{table_name}")
+def {table_name}():
+    return (spark.readStream
+        .format("cloudFiles")
+        .option("cloudFiles.format", "csv")
+        .option("cloudFiles.inferColumnTypes", "true")
+        .option("multiLine", "true")
+        .load("{output_path}/")
+    )
+'''
+        else:  # bronze and silver
+            # Generate constraint lines for silver table
+            constraint_lines = []
+            for c in quality_constraints:
+                if c['action'] == 'warn':
+                    constraint_lines.append(f"CONSTRAINT {c['name']} EXPECT ({c['condition']})")
+                elif c['action'] == 'drop':
+                    constraint_lines.append(f"CONSTRAINT {c['name']} EXPECT ({c['condition']}) ON VIOLATION DROP ROW")
+                elif c['action'] == 'fail':
+                    constraint_lines.append(f"CONSTRAINT {c['name']} EXPECT ({c['condition']}) ON VIOLATION FAIL UPDATE")
+            constraints_sql = f"(\n{', '.join(constraint_lines)}\n)" if quality_constraints else ""
+
+            # SQL code for both bronze and silver
+            sql_code = f'''
+-- Create bronze table
+CREATE OR REFRESH STREAMING TABLE bronze.{table_name}
+COMMENT '{get_table_comment("Bronze", table_name, table_type)}'
+AS SELECT * FROM STREAM read_files("{output_path}/", format => "csv", inferColumnTypes => "true", multiLine => "true");
+
+-- Create silver table with constraints
+CREATE OR REFRESH STREAMING TABLE silver.{table_name}{constraints_sql}
+COMMENT '{get_table_comment("Silver", table_name, table_type)}'
+AS SELECT * FROM STREAM(bronze.{table_name})
+'''
+
+            # Python code for both bronze and silver
+            python_constraints = []
+            for c in quality_constraints:
+                if c['action'] == 'warn':
+                    python_constraints.append(f'@dlt.expect("{c["name"]}", "{c["condition"]}")')
+                elif c['action'] == 'drop':
+                    python_constraints.append(f'@dlt.expect_or_drop("{c["name"]}", "{c["condition"]}")')
+                elif c['action'] == 'fail':
+                    python_constraints.append(f'@dlt.expect_or_fail("{c["name"]}", "{c["condition"]}")')
+
+            python_code = f'''@dlt.table(name="bronze.{table_name}")
 def {table_name}_bronze():
     return (spark.readStream
         .format("cloudFiles")
         .option("cloudFiles.format", "csv")
+        .option("cloudFiles.inferColumnTypes", "true")
+        .option("multiLine", "true")
         .load("{output_path}/")
     )
+
+@dlt.table(name="silver.{table_name}")
+{chr(10).join(python_constraints)}
+def {table_name}_silver():
+    return spark.readStream.table("bronze.{table_name}")
 '''
     
     return {
@@ -255,6 +442,15 @@ def generate_files_for_industry(industry):
     schemas = load_all_schemas(industry)
     dlt_references = []
 
+    # Check and clean up output directory before starting
+    if current_iteration == 0:
+        output_dir = os.path.join(status['output_path'], industry)
+        # Create a temporary generator instance to handle directory cleanup
+        is_local = not status['output_path'].startswith('/Volumes/')
+        # Use DimensionGenerator since it's the simplest concrete implementation
+        temp_generator = DimensionGenerator(None, status['output_path'], is_local=is_local)
+        temp_generator._check_directory_empty(output_dir)
+
     # Store dimension key ranges in first iteration
     if current_iteration == 0:
         for schema in schemas:
@@ -266,9 +462,13 @@ def generate_files_for_industry(industry):
 
     # Process all tables
     for schema in schemas:
-        table = schema["table"]
-        table_type = schema.get("type", "fact")
+        # Handle both table and table_name keys for backward compatibility
+        table = schema.get("table") or schema.get("table_name")
+        if not table:
+            logger.error(f"Schema missing both 'table' and 'table_name' keys: {schema}")
+            continue
 
+        table_type = schema.get("type", "fact")
         logger.info(f"\nProcessing table: {table} (type: {table_type})")
 
         # Skip dimension tables after first iteration
@@ -280,15 +480,31 @@ def generate_files_for_industry(industry):
             schema_path = os.path.join(SCHEMA_BASE_PATH, industry, f"{table}.yml")
             logger.info(f"Loading schema from: {schema_path}")
             
-            # Select appropriate generator based on table type
-            if table_type == "dimension":
-                generator = DimensionGenerator(schema_path, status['output_path'])
-            elif table_type == "fact":
-                generator = FactGenerator(schema_path, status['output_path'], dimension_key_ranges)
-            elif table_type == "change_feed":
-                generator = ChangeFeedGenerator(schema_path, status['output_path'])
-            else:
-                logger.warning(f"Unknown table type: {table_type}")
+            # Determine if we're in a local environment based on the output path
+            is_local = not status['output_path'].startswith('/Volumes/')
+            
+            # Select appropriate generator based on table type and generator class
+            generator = None
+            try:
+                # Check for explicit generator class first
+                generator_class = schema.get('generator_class')
+                if generator_class == 'WeatherGenerator':
+                    generator = WeatherGenerator(schema_path, status['output_path'], is_local=is_local)
+                elif table_type == "dimension":
+                    generator = DimensionGenerator(schema_path, status['output_path'], is_local=is_local)
+                elif table_type == "fact":
+                    generator = FactGenerator(schema_path, status['output_path'], dimension_key_ranges, is_local=is_local)
+                elif table_type == "change_feed":
+                    generator = ChangeFeedGenerator(schema_path, status['output_path'], is_local=is_local)
+                else:
+                    logger.warning(f"Unknown table type or generator class: {table_type}, {generator_class}")
+                    continue
+            except Exception as e:
+                logger.error(f"Error creating generator for table {table}: {str(e)}")
+                raise
+
+            if not generator:
+                logger.warning(f"No suitable generator found for table {table}")
                 continue
 
             # Generate and save data
@@ -447,29 +663,24 @@ For each table in the code:
 
 # UI Component functions
 def create_header():
-    """Create the app header with logo and title."""
+    """Create the header section of the app."""
     return html.Div([
+        html.H1("DLT StreamForge", style={'color': DB_COLORS['primary']}),
+        html.P("Generate realistic streaming data pipelines with Databricks Delta Live Tables"),
         html.Div([
-            html.I(
-                className="fas fa-stream",
-                style={
-                    'fontSize': '32px',
-                    'color': DB_COLORS['primary'],
-                    'marginRight': '12px',
-                    'verticalAlign': 'middle'
-                }
+            html.Button(
+                "Create SQL Warehouse",
+                id="create-resources-button",
+                style={**STYLES['button'], 'backgroundColor': DB_COLORS['success']}
             ),
-            html.H2("DLT StreamForge", 
-                    style={
-                        'color': DB_COLORS['text'],
-                        'fontWeight': '600',
-                        'fontSize': '24px',
-                        'display': 'inline-block',
-                        'verticalAlign': 'middle',
-                        'margin': '0'
-                    }),
-        ], style={'textAlign': 'center', 'marginBottom': '40px'}),
-    ], style={'textAlign': 'center', 'marginBottom': '40px'})
+            html.Button(
+                "Cleanup SQL Warehouse",
+                id="cleanup-resources-button",
+                style={**STYLES['button'], 'backgroundColor': DB_COLORS['primary']}
+            ),
+            html.Div(id="resource-status", style={'marginTop': '10px'})
+        ], style={'marginTop': '20px'})
+    ], style=STYLES['container'])
 
 def create_input_section():
     """Create the input section with path, dropdowns, and control button."""
@@ -479,6 +690,7 @@ def create_input_section():
                 dcc.Input(
                     id='path-input',
                     type='text',
+                    value='',
                     placeholder='Path to volume E.g./Volumes/path/to/stream/',
                     style={
                         'width': '412px',
@@ -494,6 +706,7 @@ def create_input_section():
                 dcc.Dropdown(
                     id='industry-dropdown',
                     options=[{"label": i, "value": i} for i in list_industries()],
+                    value=None,
                     placeholder="Choose industry",
                     style={
                         'border': f'1px solid {DB_COLORS["border"]}',
@@ -511,6 +724,7 @@ def create_input_section():
                         {"label": "SQL", "value": "sql"},
                         {"label": "Python", "value": "python"}
                     ],
+                    value=None,
                     placeholder="Choose language",
                     style={
                         'border': f'1px solid {DB_COLORS["border"]}',
@@ -518,9 +732,84 @@ def create_input_section():
                         'fontSize': '14px',
                         'width': '150px',
                         'display': 'inline-block',
-                        'verticalAlign': 'middle'
+                        'verticalAlign': 'middle',
+                        'marginRight': '12px'
                     }
                 ),
+            ], style={'marginBottom': '20px', 'textAlign': 'center'}),
+            html.Div([
+                dcc.Dropdown(
+                    id='dlt-output-dropdown',
+                    options=[
+                        {"label": "Bronze", "value": "bronze"},
+                        {"label": "Bronze and Silver", "value": "bronze_silver"}
+                    ],
+                    value=None,
+                    placeholder="Choose Medallion Layers",
+                    style={
+                        'border': f'1px solid {DB_COLORS["border"]}',
+                        'borderRadius': '4px',
+                        'fontSize': '14px',
+                        'width': '200px',
+                        'display': 'inline-block',
+                        'verticalAlign': 'middle',
+                        'marginRight': '12px'
+                    }
+                ),
+                dcc.Dropdown(
+                    id='dlt-mode-dropdown',
+                    options=[
+                        {"label": "Full Code", "value": "full_code"},
+                        {"label": "Workshop Mode", "value": "workshop_mode"}
+                    ],
+                    value=None,
+                    placeholder="Choose DLT Mode",
+                    style={
+                        'border': f'1px solid {DB_COLORS["border"]}',
+                        'borderRadius': '4px',
+                        'fontSize': '14px',
+                        'width': '200px',
+                        'display': 'inline-block',
+                        'verticalAlign': 'middle',
+                        'marginRight': '12px'
+                    }
+                ),
+            ], style={'marginBottom': '20px', 'textAlign': 'center'}),
+            html.Div([
+                html.Div([
+                    html.Label(
+                        "Duration (hours):",
+                        style={
+                            'display': 'inline-block',
+                            'marginRight': '10px',
+                            'fontSize': '14px',
+                            'fontWeight': '500',
+                            'color': '#666666'  # Darker gray for better readability
+                        }
+                    ),
+                    dcc.Input(
+                        id='duration-input',
+                        type='number',
+                        value=1,
+                        min=1,
+                        max=24,
+                        placeholder='Enter number of hours (1-24)',
+                        style={
+                            'width': '120px',  # Reduced width since it's side by side
+                            'padding': '8px 12px',
+                            'border': f'1px solid {DB_COLORS["border"]}',
+                            'borderRadius': '4px',
+                            'fontSize': '14px',
+                            'display': 'inline-block',
+                            'verticalAlign': 'middle',
+                            'color': '#333333'  # Darker text color for better readability
+                        }
+                    ),
+                ], style={
+                    'display': 'inline-block',
+                    'verticalAlign': 'middle',
+                    'textAlign': 'left'
+                }),
             ], style={'marginBottom': '20px', 'textAlign': 'center'}),
         ], style={'marginBottom': '20px'}),
 
@@ -599,31 +888,76 @@ app.layout = html.Div([
     create_header(),
     create_input_section(),
     create_code_section(),
-    dcc.Interval(id='interval-timer', interval=15000, n_intervals=0, disabled=True)
+    dcc.Interval(id='interval-timer', interval=15000, n_intervals=0, disabled=True),  # 15 seconds for data generation
+    dcc.Interval(id='countdown-timer', interval=1000, n_intervals=0, disabled=True),   # 1 second for countdown
+    # Add hidden div for initial state check
+    html.Div(id='initial-state-trigger', style={'display': 'none'})
 ], style={
     'backgroundColor': '#F8F9FA',
     'minHeight': '100vh',
     'padding': '40px 20px'
 })
 
-# Callbacks
+# Add callback for countdown timer
+@app.callback(
+    [Output('status-display', 'children', allow_duplicate=True),
+     Output('countdown-timer', 'disabled')],
+    Input('countdown-timer', 'n_intervals'),
+    prevent_initial_call=True
+)
+def update_countdown(n_intervals):
+    with status["lock"]:
+        if not status["running"] or not status["start_time"]:
+            return dash.no_update, True
+        
+        # Calculate remaining time
+        duration_seconds = status["duration_hours"] * 3600
+        elapsed_time = time.time() - status['start_time']
+        remaining_seconds = duration_seconds - elapsed_time
+        
+        if remaining_seconds <= 0:
+            stop_generation_thread()
+            return f"Generation stopped after {status['duration_hours']} hours.", True
+        
+        # Calculate remaining time in hours, minutes, and seconds
+        remaining_hours = int(remaining_seconds // 3600)
+        remaining_minutes = int((remaining_seconds % 3600) // 60)
+        remaining_secs = int(remaining_seconds % 60)
+        
+        # Format the remaining time message
+        time_message = f"Generating files for '{status['industry']}'... (Time remaining: "
+        if remaining_hours > 0:
+            time_message += f"{remaining_hours}h "
+        if remaining_minutes > 0 or remaining_hours > 0:
+            time_message += f"{remaining_minutes}m "
+        time_message += f"{remaining_secs}s)"
+        
+        return time_message, False
+
+# Update the control generation callback to handle interval timer
 @app.callback(
     [Output('interval-timer', 'disabled'),
      Output('status-display', 'children'),
      Output('control-button', 'children'),
      Output('control-button', 'style'),
+     Output('control-button', 'disabled'),
      Output('dlt-code-display', 'children'),
      Output('dlt-code-section', 'style'),
-     Output('export-button-container', 'style')],
+     Output('export-button-container', 'style'),
+     Output('countdown-timer', 'disabled', allow_duplicate=True)],
     [Input('control-button', 'n_clicks'),
      Input('interval-timer', 'n_intervals')],
     [State('language-dropdown', 'value'),
      State('industry-dropdown', 'value'),
      State('path-input', 'value'),
-     State('dlt-code-section', 'style')],
+     State('dlt-output-dropdown', 'value'),
+     State('dlt-mode-dropdown', 'value'),
+     State('duration-input', 'value'),
+     State('dlt-code-section', 'style'),
+     State('dlt-code-display', 'children')],
     prevent_initial_call=True
 )
-def control_generation(button_clicks, n_intervals, selected_language, selected_industry, path_input, current_section_style):
+def control_generation(button_clicks, n_intervals, selected_language, selected_industry, path_input, selected_dlt_output, selected_dlt_mode, duration_hours, current_section_style, current_display):
     global dimension_key_ranges, status
     
     ctx = dash.callback_context
@@ -634,6 +968,21 @@ def control_generation(button_clicks, n_intervals, selected_language, selected_i
     print(f"\nTrigger: {trigger}")
     print(f"Current iteration: {status['iteration_count']}")
     print(f"Current DLT code: {status['dlt_code'] is not None}")
+
+    # Update UI state
+    with status["lock"]:
+        if selected_language:
+            status["selected_language"] = selected_language
+        if selected_industry:
+            status["selected_industry"] = selected_industry
+        if path_input:
+            status["path_input"] = path_input
+        if selected_dlt_output:
+            status["selected_dlt_output"] = selected_dlt_output
+        if selected_dlt_mode:
+            status["selected_dlt_mode"] = selected_dlt_mode
+        if duration_hours:
+            status["duration_hours"] = duration_hours
 
     # Default section style
     section_style = current_section_style if current_section_style else {**STYLES['container'], 'display': 'none'}
@@ -651,114 +1000,131 @@ def control_generation(button_clicks, n_intervals, selected_language, selected_i
     start_style = {**STYLES['button'], 'backgroundColor': DB_COLORS['success']}
     stop_style = {**STYLES['button'], 'backgroundColor': DB_COLORS['primary']}
 
+    # Handle control button and interval timer
     if trigger == 'control-button':
         if not status["running"]:  # Start button was clicked
             if not path_input:
                 return True, html.Div([
                     html.Span("⚠️ Please enter a path to the volume.", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, loading_message, section_style, export_button_style
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
             
             if not selected_industry:
                 return True, html.Div([
                     html.Span("⚠️ Please select an industry.", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, loading_message, section_style, export_button_style
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
             
             if not selected_language:
                 return True, html.Div([
                     html.Span("⚠️ Please select a language.", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, loading_message, section_style, export_button_style
-            
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
+
+            if not selected_dlt_output:
+                return True, html.Div([
+                    html.Span("⚠️ Please select medallion layers for DLT Output.", 
+                             style={'color': '#FF3621'})
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
+
+            if not selected_dlt_mode:
+                return True, html.Div([
+                    html.Span("⚠️ Please select a DLT Mode.", 
+                             style={'color': '#FF3621'})
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
+
+            if not duration_hours or duration_hours < 1 or duration_hours > 24:
+                return True, html.Div([
+                    html.Span("⚠️ Please enter a valid duration between 1 and 24 hours.", 
+                             style={'color': '#FF3621'})
+                ], style={'padding': '12px'}), "Start", start_style, False, loading_message, section_style, export_button_style, True
+
             try:
                 print("\nStarting generation...")
-                status['iteration_count'] = 0
-                status['start_time'] = time.time()
-                status['dlt_code'] = None
-                status['output_path'] = path_input
-                dimension_key_ranges = {}
-                status["running"] = True
-                status["industry"] = selected_industry
+                with status["lock"]:
+                    status['iteration_count'] = 0
+                    status['start_time'] = time.time()
+                    status['dlt_code'] = None
+                    status['output_path'] = path_input
+                    dimension_key_ranges = {}
+                    status["running"] = True
+                    status["industry"] = selected_industry
+                
+                # Start the generation thread
+                start_generation_thread()
                 
                 section_style['display'] = 'block'
-                return False, f"Generating files for '{selected_industry}'...", "Stop", stop_style, loading_message, section_style, export_button_style
+                return False, f"Generating files for '{selected_industry}'...", "Stop", stop_style, False, loading_message, section_style, export_button_style, False
             except Exception as e:
                 return True, html.Div([
                     html.Span(f"⚠️ {str(e)}", 
                              style={'color': '#FF3621'})
-                ], style={'padding': '12px'}), "Start", start_style, None, section_style, export_button_style
+                ], style={'padding': '12px'}), "Start", start_style, False, None, section_style, export_button_style, True
         else:  # Stop button was clicked
             print("\nStopping generation...")
-            status["running"] = False
-            status["industry"] = None
-            status['start_time'] = None
+            # Disable button immediately and update UI
+            with status["lock"]:
+                status["running"] = False
+                status["thread"] = None
+                status["industry"] = None
+                status["iteration_count"] = 0
+                status["start_time"] = None
+                status["dlt_code"] = None
+                status["output_path"] = None
+            
+            # Stop the background thread
+            print("Stopping background thread...")
+            stop_generation_thread()
+            print("Background thread stopped and state reset")
+            
+            # Reset UI state
             section_style['display'] = 'none'
             export_button_style['display'] = 'none'
             
-            return True, "Stopped.", "Start", start_style, None, section_style, export_button_style
+            return True, "Stopped.", "Start", start_style, False, None, section_style, export_button_style, True
 
     elif trigger == 'interval-timer':
-        if not status["running"] or not status["industry"]:
-            raise dash.exceptions.PreventUpdate
-        
-        if status['start_time'] and (time.time() - status['start_time']) > 3600:  # 1 hour limit
-            print("\nTime limit reached...")
-            status["running"] = False
-            status["industry"] = None
-            status['start_time'] = None
-            section_style['display'] = 'none'
-            export_button_style['display'] = 'none'
+        with status["lock"]:
+            if not status["running"]:
+                # If generation is not running, disable the interval timer and reset state
+                stop_generation_thread()  # Ensure thread is stopped
+                return True, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, True
             
-            return True, "Generation stopped after 1 hour.", "Start", start_style, None, section_style, export_button_style
-        
-        try:
-            generate_files_for_industry(status["industry"])
+            # Check if DLT code needs to be generated
+            if status['dlt_code'] is None:
+                print("\nGenerating DLT code...")
+                try:
+                    schemas = load_all_schemas(status["industry"])
+                    dlt_codes = []
+                    for schema in schemas:
+                        table_type = schema.get("type", "fact")
+                        if table_type in ["dimension", "fact", "change_feed"]:
+                            table = schema["table"]
+                            output_path = os.path.join(status['output_path'], status["industry"], table)
+                            code = generate_dlt_references(schema, output_path, table_type)
+                            print(f"Generated code for table: {table} (type: {table_type})")
+                            dlt_codes.append({
+                                "table": table,
+                                "code": code
+                            })
+                    
+                    status['dlt_code'] = dlt_codes
+                    print(f"Stored DLT code: {status['dlt_code'] is not None}")
+                    section_style['display'] = 'block'
+                    export_button_style['display'] = 'block'
+                    return False, dash.no_update, "Stop", stop_style, False, create_dlt_code_display(dlt_codes, selected_language), section_style, export_button_style, False
+                except Exception as e:
+                    print(f"Error generating DLT code: {str(e)}")
+                    section_style['display'] = 'block'
+                    export_button_style['display'] = 'none'
+                    return False, dash.no_update, "Stop", stop_style, False, loading_message, section_style, export_button_style, False
             
-        except Exception as e:
-            status["running"] = False
-            status["industry"] = None
-            status['start_time'] = None
-            section_style['display'] = 'none'
-            export_button_style['display'] = 'none'
-            
-            return True, html.Div([
-                html.Span(f"⚠️ {str(e)}", 
-                         style={'color': '#FF3621'})
-            ], style={'padding': '12px'}), "Start", start_style, None, section_style, export_button_style
-        
-        if status['iteration_count'] == 1 and status['dlt_code'] is None:
-            print("\nGenerating DLT code...")
-            try:
-                schemas = load_all_schemas(status["industry"])
-                dlt_codes = []
-                for schema in schemas:
-                    table_type = schema.get("type", "fact")
-                    if table_type in ["dimension", "fact", "change_feed"]:
-                        table = schema["table"]
-                        output_path = os.path.join(status['output_path'], status["industry"], table)
-                        code = generate_dlt_references(schema, output_path, table_type)
-                        print(f"Generated code for table: {table} (type: {table_type})")
-                        dlt_codes.append({
-                            "table": table,
-                            "code": code
-                        })
-                
-                status['dlt_code'] = dlt_codes
-                print(f"Stored DLT code: {status['dlt_code'] is not None}")
-                section_style['display'] = 'block'
-                export_button_style['display'] = 'block'
-                return False, f"Generating files for '{status['industry']}'...", "Stop", stop_style, create_dlt_code_display(dlt_codes, selected_language), section_style, export_button_style
-            except Exception as e:
-                print(f"Error generating DLT code: {str(e)}")
-                section_style['display'] = 'block'
-                export_button_style['display'] = 'none'
-                return False, f"Generating files for '{status['industry']}'...", "Stop", stop_style, loading_message, section_style, export_button_style
-        
-        print("\nSubsequent iteration - using stored code")
-        section_style['display'] = 'block'
-        export_button_style['display'] = 'block' if status['dlt_code'] else 'none'
-        return False, f"Generating files for '{status['industry']}'...", "Stop", stop_style, create_dlt_code_display(status['dlt_code'], selected_language), section_style, export_button_style
+            print("\nSubsequent iteration - using stored code")
+            section_style['display'] = 'block'
+            export_button_style['display'] = 'block'
+            if status['dlt_code'] is None:
+                return False, dash.no_update, "Stop", stop_style, False, loading_message, section_style, export_button_style, False
+            return False, dash.no_update, "Stop", stop_style, False, create_dlt_code_display(status['dlt_code'], selected_language), section_style, export_button_style, False
 
     raise dash.exceptions.PreventUpdate
 
@@ -791,6 +1157,118 @@ def update_export_button(code_display):
     if not code_display or isinstance(code_display, str):
         return True
     return False
+
+# Add callback for initial state check
+@app.callback(
+    [Output('initial-state-trigger', 'children'),
+     Output('language-dropdown', 'value'),
+     Output('industry-dropdown', 'value'),
+     Output('path-input', 'value'),
+     Output('dlt-output-dropdown', 'value'),
+     Output('dlt-mode-dropdown', 'value'),
+     Output('duration-input', 'value')],
+    Input('initial-state-trigger', 'children'),
+    prevent_initial_call=False  # Allow initial call
+)
+def trigger_initial_state_check(_):
+    """Return current state values on page load."""
+    with status["lock"]:
+        if status["running"]:
+            return [
+                'triggered',
+                status["selected_language"],
+                status["selected_industry"],
+                status["path_input"],
+                status["selected_dlt_output"],
+                status["selected_dlt_mode"],
+                status["duration_hours"]
+            ]
+        return ['triggered', '', '', '', '', '', 8]  # Default duration to 8 hours
+
+# Add UI state sync callback
+@app.callback(
+    [Output('control-button', 'children', allow_duplicate=True),
+     Output('control-button', 'style', allow_duplicate=True),
+     Output('dlt-code-section', 'style', allow_duplicate=True),
+     Output('export-button-container', 'style', allow_duplicate=True)],
+    [Input('initial-state-trigger', 'children')],
+    prevent_initial_call='initial_duplicate'
+)
+def sync_ui_state(_):
+    """Sync UI elements with server state on page load."""
+    # Button styles
+    start_style = {**STYLES['button'], 'backgroundColor': DB_COLORS['success']}
+    stop_style = {**STYLES['button'], 'backgroundColor': DB_COLORS['primary']}
+    
+    # Default section style
+    section_style = {**STYLES['container'], 'display': 'none'}
+    export_button_style = {'textAlign': 'center', 'display': 'none'}
+    
+    with status["lock"]:
+        if status["running"]:
+            section_style['display'] = 'block'
+            export_button_style['display'] = 'block'
+            return "Stop", stop_style, section_style, export_button_style
+        else:
+            return "Start", start_style, section_style, export_button_style
+
+# Add separate callback for language dropdown
+@app.callback(
+    Output('dlt-code-display', 'children', allow_duplicate=True),
+    Input('language-dropdown', 'value'),
+    State('dlt-code-display', 'children'),
+    prevent_initial_call=True
+)
+def update_code_display(language, current_display):
+    """Update code display when language changes."""
+    if not language or not status['dlt_code']:
+        return dash.no_update
+    
+    try:
+        return create_dlt_code_display(status['dlt_code'], language)
+    except Exception as e:
+        logger.error(f"Error updating code display: {str(e)}")
+        return current_display
+
+# Add new callbacks for resource management
+@app.callback(
+    Output('resource-status', 'children'),
+    [Input('create-resources-button', 'n_clicks'),
+     Input('cleanup-resources-button', 'n_clicks')],
+    prevent_initial_call=True
+)
+def handle_resource_management(create_clicks, cleanup_clicks):
+    """Handle resource management button clicks."""
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return ""
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if button_id == 'create-resources-button':
+        try:
+            if not status["resource_manager"]:
+                status["resource_manager"] = init_resource_manager()
+            resource_ids = status["resource_manager"].create_resources()
+            status["resources_created"] = True
+            return html.Div([
+                html.P("SQL Warehouse created successfully!", style={'color': DB_COLORS['success']}),
+                html.Pre(json.dumps(resource_ids, indent=2), style=STYLES['code_block'])
+            ])
+        except Exception as e:
+            return html.P(f"Error creating SQL Warehouse: {str(e)}", style={'color': DB_COLORS['primary']})
+    
+    elif button_id == 'cleanup-resources-button':
+        try:
+            if status["resource_manager"]:
+                status["resource_manager"].cleanup_resources()
+                status["resources_created"] = False
+                return html.P("SQL Warehouse cleaned up successfully!", style={'color': DB_COLORS['success']})
+            return html.P("No SQL Warehouse to clean up", style={'color': DB_COLORS['text']})
+        except Exception as e:
+            return html.P(f"Error cleaning up SQL Warehouse: {str(e)}", style={'color': DB_COLORS['primary']})
+    
+    return ""
 
 if __name__ == "__main__":
     app.run(debug=True)
