@@ -6,8 +6,8 @@
         "max_clusters": 2,
         "auto_stop_mins": 480,
         "tags": {
-            "Project": "Gas-Emissions",
-            "Schema": "Delta-Drive"
+            "Project": "Delta-Drive",
+            "Schema": "Gas-Emissions-Final2"
         }
     }
 } 
