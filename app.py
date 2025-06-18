@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 # Constants
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SCHEMA_BASE_PATH = os.path.join(APP_DIR, "schema")
+INFRASTRUCTURE_PATH = os.path.join(APP_DIR, "infrastructure")
 
 # Theme configuration
 DB_COLORS = {
@@ -93,12 +94,59 @@ status = {
     "path_input": None,
     "selected_dlt_output": None,
     "selected_dlt_mode": None,
-    "duration_hours": 8,  # Default to 4 hours
+    "duration_hours": 8,  # Default to 8 hours
     "resource_creation_status": None,
     "resource_cleanup_status": None,
     "warehouse_id": None,
     "warehouse_status": None
 }
+
+# Initialize resource manager
+def init_resource_manager():
+    """Initialize the resource manager with default configuration."""
+    config_path = os.path.join(INFRASTRUCTURE_PATH, "config.json")
+    return ResourceManager(config_path=config_path if os.path.exists(config_path) else None)
+
+# Initialize Dash app
+app = dash.Dash(__name__)
+server = app.server
+
+# Add resource management endpoints
+@app.server.route('/api/resources/create', methods=['POST'])
+def create_resources():
+    """Endpoint to create Databricks resources."""
+    try:
+        if not status["resource_manager"]:
+            status["resource_manager"] = init_resource_manager()
+        
+        resource_ids = status["resource_manager"].create_resources()
+        status["resources_created"] = True
+        return jsonify({"status": "success", "resource_ids": resource_ids})
+    except Exception as e:
+        logger.error(f"Error creating resources: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.server.route('/api/resources/cleanup', methods=['POST'])
+def cleanup_resources():
+    """Endpoint to clean up Databricks resources."""
+    try:
+        if status["resource_manager"]:
+            status["resource_manager"].cleanup_resources()
+            status["resources_created"] = False
+            return jsonify({"status": "success"})
+        return jsonify({"status": "error", "message": "No resources to clean up"}), 404
+    except Exception as e:
+        logger.error(f"Error cleaning up resources: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.server.route('/api/resources/status', methods=['GET'])
+def get_resources_status():
+    """Endpoint to check resource creation status."""
+    return jsonify({
+        "resources_created": status["resources_created"],
+        "has_resource_manager": status["resource_manager"] is not None
+    })
+
 
 def generation_service():
     """Background service that runs file generation."""
@@ -142,10 +190,6 @@ def stop_generation_thread():
             # Don't reset selected_language, selected_industry, path_input, and selected_dlt_output
             # as they are UI state that should persist
             print("Background thread stopped and state reset")
-
-# Initialize Dash app
-app = dash.Dash(__name__)
-server = app.server
 
 # Add state endpoint
 @app.server.route('/api/state')
@@ -623,29 +667,24 @@ For each table in the code:
 
 # UI Component functions
 def create_header():
-    """Create the app header with logo and title."""
+    """Create the header section of the app."""
     return html.Div([
+        html.H1("DLT StreamForge", style={'color': DB_COLORS['primary']}),
+        html.P("Generate realistic streaming data pipelines with Databricks Delta Live Tables"),
         html.Div([
-            html.I(
-                className="fas fa-stream",
-                style={
-                    'fontSize': '32px',
-                    'color': DB_COLORS['primary'],
-                    'marginRight': '12px',
-                    'verticalAlign': 'middle'
-                }
+            html.Button(
+                "Create SQL Warehouse",
+                id="create-resources-button",
+                style={**STYLES['button'], 'backgroundColor': DB_COLORS['success']}
             ),
-            html.H2("DLT StreamForge", 
-                    style={
-                        'color': DB_COLORS['text'],
-                        'fontWeight': '600',
-                        'fontSize': '24px',
-                        'display': 'inline-block',
-                        'verticalAlign': 'middle',
-                        'margin': '0'
-                    }),
-        ], style={'textAlign': 'center', 'marginBottom': '40px'}),
-    ], style={'textAlign': 'center', 'marginBottom': '40px'})
+            html.Button(
+                "Cleanup SQL Warehouse",
+                id="cleanup-resources-button",
+                style={**STYLES['button'], 'backgroundColor': DB_COLORS['primary']}
+            ),
+            html.Div(id="resource-status", style={'marginTop': '10px'})
+        ], style={'marginTop': '20px'})
+    ], style=STYLES['container'])
 
 def create_input_section():
     """Create the input section with path, dropdowns, and control button."""
@@ -1252,7 +1291,7 @@ def trigger_initial_state_check(_):
                 status["selected_dlt_mode"],
                 status["duration_hours"]
             ]
-        return ['triggered', '', '', '', '', '', 4]  # Default duration to 4 hours
+        return ['triggered', '', '', '', '', '', 8]  # Default duration to 8 hours
 
 # Add UI state sync callback
 @app.callback(
