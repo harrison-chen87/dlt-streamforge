@@ -120,29 +120,6 @@ if os.getenv('DASH_DEBUG', 'true').lower() == 'true':
     app.config.external_stylesheets = []
     app.config.external_scripts = []
     
-    # Set up file watcher exclusions
-    app.config.hot_reload_exclude = [
-        "*.pyc",
-        "__pycache__/*",
-        ".venv/*",
-        "venv/*",
-        "env/*",
-        ".env/*",
-        "node_modules/*",
-        ".git/*",
-        "*.log",
-        "*.tmp",
-        "*.swp",
-        "*.swo",
-        "*~",
-        ".DS_Store",
-        "Thumbs.db",
-        "*.csv",
-        "*.parquet",
-        "*.json",
-        "resource_ids.json",
-        "schema/*",
-        "infrastructure/config.json"
     ]
 
 def generation_service():
