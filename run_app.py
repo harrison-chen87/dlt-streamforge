@@ -49,29 +49,6 @@ if __name__ == "__main__":
             dev_tools_props_check=True,
             dev_tools_serve_dev_bundles=True,
             dev_tools_prune_errors=True,
-            dev_tools_hot_reload_exclude=[
-                "*.pyc",
-                "__pycache__/*",
-                ".venv/*",
-                "venv/*",
-                "env/*",
-                ".env/*",
-                "node_modules/*",
-                ".git/*",
-                "*.log",
-                "*.tmp",
-                "*.swp",
-                "*.swo",
-                "*~",
-                ".DS_Store",
-                "Thumbs.db",
-                "*.csv",
-                "*.parquet",
-                "*.json",
-                "resource_ids.json",
-                "schema/*",
-                "infrastructure/config.json"
-            ]
         )
     except KeyboardInterrupt:
         print("\nShutting down server...")
