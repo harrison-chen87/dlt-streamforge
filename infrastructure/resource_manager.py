@@ -270,7 +270,7 @@ class ResourceManager:
             notebook_api_url = f"{self.host}api/2.0/workspace/import"
             
             # Create a unique notebook path in the workspace
-            notebook_path = f"/Workspace/Repos/StreamForge/{pipeline_name}_dlt_pipeline"
+            notebook_path = f"/Workspace/Repos/StreamForge/{pipeline_name}_dlt_pipeline.py"
             
             # Convert notebook content to Python file content
             try:
