@@ -93,7 +93,7 @@ status = {
     "path_input": None,
     "selected_dlt_output": None,
     "selected_dlt_mode": None,
-    "duration_hours": 4,  # Default to 4 hours
+    "duration_hours": 8,  # Default to 4 hours
     "resource_creation_status": None,
     "resource_cleanup_status": None,
     "warehouse_id": None,
@@ -870,7 +870,7 @@ def create_infrastructure_section():
                     html.I(className="fas fa-trash", style={'marginRight': '8px'}),
                     "Cleanup Resources"
                 ],
-                    id='cleanup-resources-button',
+                    id='infrastructure-cleanup-button',
                     n_clicks=0,
                     style={**STYLES['button'], 'backgroundColor': DB_COLORS['primary']}
                 ),
@@ -1305,7 +1305,7 @@ def update_code_display(language, current_display):
      Output('warehouse-status-display', 'children'),
      Output('warehouse-status-display', 'style')],
     [Input('create-warehouse-button', 'n_clicks'),
-     Input('cleanup-resources-button', 'n_clicks')],
+     Input('infrastructure-cleanup-button', 'n_clicks')],
     [State('databricks-host-input', 'value'),
      State('databricks-token-input', 'value')],
     prevent_initial_call=True
@@ -1344,7 +1344,7 @@ def handle_infrastructure_actions(create_clicks, cleanup_clicks, host, token):
             
             return f"SQL Warehouse created successfully with ID: {warehouse_id}", status_display, {'display': 'block'}
             
-        elif button_id == 'cleanup-resources-button':
+        elif button_id == 'infrastructure-cleanup-button':
             # Cleanup resources
             resource_manager.cleanup_resources()
             return "Resources cleaned up successfully.", "", {'display': 'none'}
