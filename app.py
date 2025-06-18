@@ -113,11 +113,6 @@ def init_resource_manager():
 app = dash.Dash(__name__)
 server = app.server
 
-# Configure file watcher to avoid infinite loops
-if os.getenv('DASH_DEBUG', 'true').lower() == 'true':
-    # Only watch specific directories and files
-    app.config.suppress_callback_exceptions = True
-    app.config.external_stylesheets = []
     app.config.external_scripts = []
     
     ]
