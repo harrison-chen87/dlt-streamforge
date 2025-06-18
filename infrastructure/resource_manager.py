@@ -1,47 +1,31 @@
-#Some changes
-
 import os
 import json
 import logging
 import argparse
 import requests
 from urllib.parse import urljoin
-from dotenv import load_dotenv
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
-logger.info("Loading environment variables from .env file...")
-load_dotenv()
-logger.info(f"Current working directory: {os.getcwd()}")
-logger.info(f"Environment variables loaded: DATABRICKS_HOST={os.getenv('DATABRICKS_HOST')}, DATABRICKS_TOKEN={'*' * 10 if os.getenv('DATABRICKS_TOKEN') else 'Not found'}")
-
 class ResourceManager:
-    def __init__(self, config_path=None):
+    def __init__(self, databricks_host=None, databricks_token=None, config_path=None):
         self.config = self._load_config(config_path)
         
-        # Force token-based authentication
-        os.environ['DATABRICKS_AUTH_TYPE'] = 'pat'
-        
-        # Get and validate host URL
-        host = os.getenv('DATABRICKS_HOST', '')
-        if not host.startswith('http://') and not host.startswith('https://'):
-            host = f'https://{host}'
-        self.host = host
-        
-        self.token = os.getenv('DATABRICKS_TOKEN')
+        # Use provided credentials or fall back to environment variables
+        self.host = databricks_host or os.getenv('DATABRICKS_HOST', '')
+        self.token = databricks_token or os.getenv('DATABRICKS_TOKEN', '')
         
         if not self.host or not self.token:
             raise ValueError(
-                "DATABRICKS_HOST and DATABRICKS_TOKEN must be set in the .env file. "
-                "Example .env file contents:\n"
-                "DATABRICKS_HOST=https://your-workspace.cloud.databricks.com\n"
-                "DATABRICKS_TOKEN=your-access-token"
+                "DATABRICKS_HOST and DATABRICKS_TOKEN must be provided as parameters or set as environment variables."
             )
         
-        # Ensure host URL ends with a slash
+        # Ensure host URL is properly formatted
+        if not self.host.startswith('http://') and not self.host.startswith('https://'):
+            self.host = f'https://{self.host}'
+        
         if not self.host.endswith('/'):
             self.host = f"{self.host}/"
         
@@ -60,9 +44,9 @@ class ResourceManager:
         return {
             "warehouse": {
                 "name": "Gas Emissions Analytics Warehouse",
-                "cluster_size": "X-Large",  # Maximum size for serverless
+                "cluster_size": "X-Large",
                 "min_clusters": 1,
-                "max_clusters": 2,  # Using 2 clusters for maximum compute power
+                "max_clusters": 10,  # Updated to 10 clusters
                 "auto_stop_mins": 480,  # 8 hours
                 "tags": {
                     "Project": "Gas-Emissions",
@@ -76,14 +60,6 @@ class ResourceManager:
         logger.info("Starting SQL Warehouse creation...")
         
         try:
-            # Note: We are using serverless compute (PRO warehouse type) instead of classic compute
-            # because the workspace lacks the necessary AWS IAM permissions to launch EC2 instances.
-            # The error "UnauthorizedOperation: You are not authorized to perform this operation"
-            # indicates that the Databricks workspace's AWS role doesn't have permissions to:
-            # 1. Launch EC2 instances
-            # 2. Create and manage VPC resources
-            # 3. Manage security groups and network interfaces
-            
             # Prepare warehouse creation payload
             payload = {
                 "name": self.config["warehouse"]["name"],
@@ -102,7 +78,7 @@ class ResourceManager:
             logger.info("Sending warehouse creation request...")
             api_url = f"{self.host}api/2.0/sql/warehouses"
             logger.info(f"API URL: {api_url}")
-            logger.info(f"Payload: {json.dumps(payload, indent=2)}")  # Log the payload for debugging
+            logger.info(f"Payload: {json.dumps(payload, indent=2)}")
             
             response = requests.post(
                 api_url,
@@ -133,10 +109,6 @@ class ResourceManager:
 
         except Exception as e:
             logger.error(f"Error creating SQL Warehouse: {str(e)}")
-            logger.error(f"Error type: {type(e)}")
-            logger.error(f"Error details: {e.__dict__ if hasattr(e, '__dict__') else 'No details available'}")
-            import traceback
-            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
 
     def cleanup_resources(self, resource_ids=None):
@@ -203,10 +175,16 @@ def main():
     parser = argparse.ArgumentParser(description="Gas Emissions Resource Manager")
     parser.add_argument("--cleanup", action="store_true", help="Clean up resources instead of creating them")
     parser.add_argument("--config", help="Path to configuration file")
+    parser.add_argument("--host", help="Databricks host URL")
+    parser.add_argument("--token", help="Databricks access token")
     parser.add_argument("--status", help="Check status of a specific warehouse ID")
     args = parser.parse_args()
 
-    resource_manager = ResourceManager(config_path=args.config)
+    resource_manager = ResourceManager(
+        databricks_host=args.host,
+        databricks_token=args.token,
+        config_path=args.config
+    )
     
     try:
         if args.status:

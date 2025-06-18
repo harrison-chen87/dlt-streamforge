@@ -16,7 +16,9 @@ from dash.dependencies import ClientsideFunction
 from threading import Thread
 import threading
 from flask import jsonify
-from infrastructure.resource_manager import ResourceManager
+import sys
+sys.path.append('infrastructure')
+from resource_manager import ResourceManager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -93,8 +95,10 @@ status = {
     "selected_dlt_output": None,
     "selected_dlt_mode": None,
     "duration_hours": 8,  # Default to 8 hours
-    "resource_manager": None,
-    "resources_created": False
+    "resource_creation_status": None,
+    "resource_cleanup_status": None,
+    "warehouse_id": None,
+    "warehouse_status": None
 }
 
 # Initialize resource manager
@@ -834,6 +838,109 @@ def create_input_section():
         ),
     ], style={**STYLES['input_container'], 'paddingBottom': '30px'})
 
+def create_infrastructure_section():
+    """Create the infrastructure management section."""
+    return html.Div([
+        html.H3("Infrastructure Management", style={
+            'color': DB_COLORS['text'],
+            'fontWeight': '600',
+            'fontSize': '20px',
+            'marginBottom': '20px',
+            'textAlign': 'center'
+        }),
+        
+        html.Div([
+            html.Div([
+                html.Label("Databricks Host URL:", style={
+                    'display': 'block',
+                    'marginBottom': '5px',
+                    'fontSize': '14px',
+                    'fontWeight': '500',
+                    'color': DB_COLORS['text']
+                }),
+                dcc.Input(
+                    id='databricks-host-input',
+                    type='text',
+                    placeholder='https://your-workspace.cloud.databricks.com',
+                    style={
+                        'width': '100%',
+                        'padding': '8px 12px',
+                        'border': f'1px solid {DB_COLORS["border"]}',
+                        'borderRadius': '4px',
+                        'fontSize': '14px',
+                        'marginBottom': '15px'
+                    }
+                ),
+            ]),
+            
+            html.Div([
+                html.Label("Databricks Access Token:", style={
+                    'display': 'block',
+                    'marginBottom': '5px',
+                    'fontSize': '14px',
+                    'fontWeight': '500',
+                    'color': DB_COLORS['text']
+                }),
+                dcc.Input(
+                    id='databricks-token-input',
+                    type='password',
+                    placeholder='Enter your Databricks access token',
+                    style={
+                        'width': '100%',
+                        'padding': '8px 12px',
+                        'border': f'1px solid {DB_COLORS["border"]}',
+                        'borderRadius': '4px',
+                        'fontSize': '14px',
+                        'marginBottom': '20px'
+                    }
+                ),
+            ]),
+            
+            html.Div([
+                html.Button([
+                    html.I(className="fas fa-plus", style={'marginRight': '8px'}),
+                    "Create SQL Warehouse"
+                ],
+                    id='create-warehouse-button',
+                    n_clicks=0,
+                    style={**STYLES['button'], 'backgroundColor': DB_COLORS['success'], 'marginRight': '10px'}
+                ),
+                html.Button([
+                    html.I(className="fas fa-trash", style={'marginRight': '8px'}),
+                    "Cleanup Resources"
+                ],
+                    id='cleanup-resources-button',
+                    n_clicks=0,
+                    style={**STYLES['button'], 'backgroundColor': DB_COLORS['primary']}
+                ),
+            ], style={'textAlign': 'center', 'marginBottom': '15px'}),
+            
+            html.Div(
+                id='infrastructure-status',
+                style={
+                    'padding': '12px',
+                    'borderRadius': '4px',
+                    'color': DB_COLORS['text'],
+                    'fontSize': '14px',
+                    'fontWeight': '400',
+                    'minHeight': '20px'
+                }
+            ),
+            
+            html.Div(
+                id='warehouse-status-display',
+                style={
+                    'padding': '12px',
+                    'borderRadius': '4px',
+                    'backgroundColor': '#f8f9fa',
+                    'border': f'1px solid {DB_COLORS["border"]}',
+                    'marginTop': '15px',
+                    'display': 'none'
+                }
+            ),
+        ], style={'maxWidth': '500px', 'margin': '0 auto'}),
+    ], style={**STYLES['input_container'], 'marginTop': '20px'})
+
 def create_code_section():
     """Create the code display section with export button."""
     return html.Div([
@@ -887,6 +994,7 @@ def create_code_section():
 app.layout = html.Div([
     create_header(),
     create_input_section(),
+    create_infrastructure_section(),
     create_code_section(),
     dcc.Interval(id='interval-timer', interval=15000, n_intervals=0, disabled=True),  # 15 seconds for data generation
     dcc.Interval(id='countdown-timer', interval=1000, n_intervals=0, disabled=True),   # 1 second for countdown
@@ -1230,45 +1338,59 @@ def update_code_display(language, current_display):
         logger.error(f"Error updating code display: {str(e)}")
         return current_display
 
-# Add new callbacks for resource management
+# Infrastructure management callbacks
 @app.callback(
-    Output('resource-status', 'children'),
-    [Input('create-resources-button', 'n_clicks'),
+    [Output('infrastructure-status', 'children'),
+     Output('warehouse-status-display', 'children'),
+     Output('warehouse-status-display', 'style')],
+    [Input('create-warehouse-button', 'n_clicks'),
      Input('cleanup-resources-button', 'n_clicks')],
+    [State('databricks-host-input', 'value'),
+     State('databricks-token-input', 'value')],
     prevent_initial_call=True
 )
-def handle_resource_management(create_clicks, cleanup_clicks):
-    """Handle resource management button clicks."""
+def handle_infrastructure_actions(create_clicks, cleanup_clicks, host, token):
+    """Handle infrastructure creation and cleanup actions."""
     ctx = dash.callback_context
     if not ctx.triggered:
-        return ""
+        return "", "", {'display': 'none'}
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-    if button_id == 'create-resources-button':
-        try:
-            if not status["resource_manager"]:
-                status["resource_manager"] = init_resource_manager()
-            resource_ids = status["resource_manager"].create_resources()
-            status["resources_created"] = True
-            return html.Div([
-                html.P("SQL Warehouse created successfully!", style={'color': DB_COLORS['success']}),
-                html.Pre(json.dumps(resource_ids, indent=2), style=STYLES['code_block'])
+    if not host or not token:
+        return "Please provide both Databricks host URL and access token.", "", {'display': 'none'}
+    
+    try:
+        resource_manager = ResourceManager(databricks_host=host, databricks_token=token)
+        
+        if button_id == 'create-warehouse-button':
+            # Create warehouse
+            resource_ids = resource_manager.create_resources()
+            warehouse_id = resource_ids["warehouse_id"]
+            
+            # Get warehouse status
+            status = resource_manager.get_warehouse_status(warehouse_id)
+            
+            status_display = html.Div([
+                html.H4("Warehouse Created Successfully!", style={'color': DB_COLORS['success'], 'marginBottom': '10px'}),
+                html.P(f"Warehouse ID: {status['id']}"),
+                html.P(f"Name: {status['name']}"),
+                html.P(f"State: {status['state']}"),
+                html.P(f"Size: {status['size']}"),
+                html.P(f"Auto-stop after: {status['auto_stop_mins']} minutes"),
+                html.P(f"Created at: {status['created_at']}")
             ])
-        except Exception as e:
-            return html.P(f"Error creating SQL Warehouse: {str(e)}", style={'color': DB_COLORS['primary']})
-    
-    elif button_id == 'cleanup-resources-button':
-        try:
-            if status["resource_manager"]:
-                status["resource_manager"].cleanup_resources()
-                status["resources_created"] = False
-                return html.P("SQL Warehouse cleaned up successfully!", style={'color': DB_COLORS['success']})
-            return html.P("No SQL Warehouse to clean up", style={'color': DB_COLORS['text']})
-        except Exception as e:
-            return html.P(f"Error cleaning up SQL Warehouse: {str(e)}", style={'color': DB_COLORS['primary']})
-    
-    return ""
+            
+            return f"SQL Warehouse created successfully with ID: {warehouse_id}", status_display, {'display': 'block'}
+            
+        elif button_id == 'cleanup-resources-button':
+            # Cleanup resources
+            resource_manager.cleanup_resources()
+            return "Resources cleaned up successfully.", "", {'display': 'none'}
+            
+    except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        return error_msg, "", {'display': 'none'}
 
 if __name__ == "__main__":
     app.run(debug=True)
