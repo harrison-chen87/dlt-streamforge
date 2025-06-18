@@ -113,9 +113,6 @@ def init_resource_manager():
 app = dash.Dash(__name__)
 server = app.server
 
-    app.config.external_scripts = []
-    
-    ]
 
 def generation_service():
     """Background service that runs file generation."""
