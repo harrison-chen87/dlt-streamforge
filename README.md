@@ -1,206 +1,122 @@
 # DLT StreamForge
 
-A Python-based data generation tool for creating realistic streaming data pipelines with Databricks Delta Live Tables (DLT). This tool generates dimension, fact, and change feed tables with configurable schemas and data quality rules.
+A comprehensive data generation and Delta Live Tables (DLT) pipeline deployment tool for Databricks. This application generates synthetic data for various industries and creates DLT pipelines with file arrival triggers.
 
 ## Features
 
-- **Multiple Table Types**:
-  - Dimension tables with configurable key ranges
-  - Fact tables with foreign key relationships
-  - Change feed tables with SCD Type 2 support
-  - Support for multiple industries (Retail, Energy, etc.)
+- **Multi-Industry Data Generation**: Generate synthetic data for Energy, Manufacturing, Healthcare, and more
+- **DLT Pipeline Creation**: Automatically create DLT pipelines with file arrival triggers
+- **SQL Warehouse Management**: Create and manage multiple SQL warehouses
+- **Real-time Data Streaming**: Generate continuous data streams with configurable intervals
+- **Infrastructure Management**: Comprehensive resource creation and cleanup
 
-- **Data Quality Rules**:
-  - Configurable min/max values for numeric columns
-  - Anomaly percentage to generate out-of-range values
-  - Automatic data quality rule application during generation
-  - Support for both normal and anomalous data patterns
+## File Watching Issue Fix
 
-- **DLT Pipeline Generation**:
-  - Automatic DLT code generation in SQL and Python
-  - Support for streaming tables and views
-  - SCD Type 2 implementation for change feeds
-  - Exportable as Jupyter notebooks
-  - Flexible medallion architecture options (Bronze only or Bronze + Silver)
-  - Two DLT modes: Full Code and Workshop Mode
+The app previously experienced infinite debug loops due to Dash's file watcher monitoring the virtual environment directory. This has been resolved with:
 
-- **Continuous Data Generation**:
-  - Simulates real-time data streaming by continuously generating files
-  - Configurable duration (1-24 hours) with countdown timer
-  - Maintains referential integrity across dimension and fact tables
-  - Generates new data every 15 seconds
-  - Automatic cleanup when duration expires
-  - Persistent UI state during page reloads
-
-## Prerequisites
-
-- Python 3.8+
-- Databricks CLI configured (for Databricks deployment)
-- Required Python packages (see requirements.txt)
+1. **File Watcher Exclusions**: Configured to exclude `.venv/`, `__pycache__/`, and other problematic directories
+2. **Optimized Debug Configuration**: Reduced file watching intervals and added comprehensive exclusions
+3. **Multiple Run Modes**: Different scripts for development and production environments
 
 ## Installation
 
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/dlt-streamforge.git
-cd dlt-streamforge
-```
-
+1. Clone the repository
 2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## Running the Application
+
+### Option 1: Development Mode (with optimized debugging)
 ```bash
-pip install -r requirements.txt
+python run_app.py
 ```
+- Includes hot reload for development
+- Optimized file watching to avoid loops
+- Reduced debug noise
+
+### Option 2: Production Mode (no debugging)
+```bash
+python run_production.py
+```
+- No file watching
+- No debug output
+- Best for production deployments
+
+### Option 3: Direct Run (legacy)
+```bash
+python app.py
+```
+- Basic debug mode
+- May experience file watching issues
+
+## Configuration
+
+### Environment Variables
+- `DASH_DEBUG`: Set to 'true' for debug mode, 'false' for production
+- `FLASK_ENV`: Set to 'development' or 'production'
+
+### File Watcher Exclusions
+The app automatically excludes these directories from file watching:
+- `.venv/`, `venv/`, `env/` (Virtual environments)
+- `__pycache__/`, `*.pyc` (Python cache)
+- `*.csv`, `*.parquet`, `*.json` (Generated data files)
+- `schema/` (Large YAML schema files)
+- Various system and IDE files
 
 ## Usage
 
-1. **Configure Schema**:
-   - Place your schema YAML files in the `schema/{industry}` directory
-   - Define tables, columns, and data quality rules
-   - Example schema structure:
-   ```yaml
-   table: energy_consumption
-   type: fact
-   num_rows: 1000
-   columns:
-     plant_id:
-       type: int
-     consumption_value:
-       type: float
-   data_quality_rules:
-     consumption_value:
-       min_value: 0
-       max_value: 1000
-       anomaly_percentage: 0.05  # 5% of values will be outside range
-   ```
+1. **Select Industry**: Choose from available industries (Energy, Manufacturing, etc.)
+2. **Configure Data Generation**: Set output path, duration, and DLT mode
+3. **Generate Data**: Start the data generation process
+4. **Manage Infrastructure**: Create SQL warehouses and deploy DLT pipelines
+5. **Monitor**: Track generation progress and resource status
 
-2. **Run the Application**:
-   ```bash
-   python app.py
-   ```
+## Architecture
 
-3. **Generate Data**:
-   - Enter a volume or directory path to stream the generated data model files
-   - Select your industry
-   - Choose output language (SQL/Python)
-   - Select medallion layers (Bronze only or Bronze + Silver)
-   - Choose DLT mode (Full Code or Workshop Mode)
-   - Set duration in hours (1-24, default: 4)
-   - Click "Start" to begin generation
+- **Frontend**: Dash web application with real-time updates
+- **Backend**: Python data generators and Databricks SDK integration
+- **Infrastructure**: Resource management for SQL warehouses and DLT pipelines
+- **Data**: YAML-based schema definitions for different industries
 
-   The application will:
-   - Generate initial dimension tables and DLT code
-   - Continuously generate new fact and change feed data every 15 seconds
-   - Maintain referential integrity with dimension tables
-   - Show countdown timer with remaining time
-   - Continue until either:
-     * You click the "Stop" button
-     * The configured duration expires
-   - Automatically stop and clean up resources when finished
-   - Maintain UI state consistency during page reloads
+## Troubleshooting
 
-### DLT Generation Options
+### File Watching Loops
+If you experience infinite debug loops:
+1. Use `run_production.py` for production environments
+2. Use `run_app.py` for development with optimized settings
+3. Check that `.dashignore` file is present
+4. Ensure virtual environment is in excluded directories
 
-1. **Medallion Layers**:
-   - **Bronze Only**: Generates DLT code for raw data ingestion only
-   - **Bronze + Silver**: Generates DLT code for both raw data ingestion and quality-enriched tables
+### Databricks Connection Issues
+1. Verify workspace ID and access token
+2. Check network connectivity to Databricks workspace
+3. Ensure proper permissions for SQL warehouse and pipeline creation
 
-2. **DLT Modes**:
-   - **Full Code**: Generates complete, production-ready DLT code
-   - **Workshop Mode**: Generates code with placeholders for educational purposes
+## File Structure
 
-3. **Duration Control**:
-   - Set generation duration between 1 and 24 hours
-   - Real-time countdown timer shows remaining time
-   - Automatic cleanup when duration expires
-   - UI state persists during page reloads
-
-## Schema Configuration
-
-### Table Types
-
-1. **Dimension Tables**:
-   ```yaml
-   table: equipment
-   type: dimension
-   num_rows: 500
-   columns:
-     equipment_id:
-       type: int
-     equipment_name:
-       type: string
-   ```
-
-2. **Fact Tables**:
-   ```yaml
-   table: energy_consumption
-   type: fact
-   num_rows: 1000
-   columns:
-     plant_id:
-       type: int
-     consumption_value:
-       type: float
-   data_quality_rules:
-     consumption_value:
-       min_value: 0
-       max_value: 1000
-       anomaly_percentage: 0.05
-   ```
-
-3. **Change Feed Tables**:
-   ```yaml
-   table: customer_changes
-   type: change_feed
-   num_rows: 100
-   columns:
-     key:
-       type: string
-     change_timestamp:
-       type: datetime
-   change_feed_rules:
-     dlt_config:
-       keys: ["key"]
-       sequence_by: "change_timestamp"
-   ```
-
-### Data Quality Rules
-
-Data quality rules can be defined for any column in your schema:
-
-```yaml
-data_quality_rules:
-  column_name:
-    min_value: 0        # Minimum allowed value
-    max_value: 1000     # Maximum allowed value
-    anomaly_percentage: 0.05  # Percentage of values that will be outside range
 ```
-
-## Output
-
-The tool generates:
-1. CSV files for each table
-2. DLT pipeline code in SQL and Python
-3. Jupyter notebook with complete pipeline code
-   - Provides guidance on replacing placeholders in Workshop Mode
-   - Contains links to relevant Databricks documentation
-
-## Deployment
-
-### Local Development
-- Run `python app.py`
-- Access the UI at `http://localhost:8050`
-
-### Databricks Deployment
-1. Configure Databricks CLI
-2. Deploy to Databricks workspace
-3. Access through Databricks URL
+dlt-streamforge/
+├── app.py                 # Main application file
+├── run_app.py            # Development run script
+├── run_production.py     # Production run script
+├── .dashignore           # Dash file watcher exclusions
+├── requirements.txt      # Python dependencies
+├── infrastructure/       # Resource management
+│   └── resource_manager.py
+├── schema/              # Industry schema definitions
+└── data_generators.py   # Data generation logic
+```
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Submit a pull request
+3. Make your changes
+4. Test with both development and production modes
+5. Submit a pull request
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License.

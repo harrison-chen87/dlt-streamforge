@@ -16,7 +16,9 @@ from dash.dependencies import ClientsideFunction
 from threading import Thread
 import threading
 from flask import jsonify
-from infrastructure.resource_manager import ResourceManager
+import sys
+sys.path.append('infrastructure')
+from resource_manager import ResourceManager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -93,8 +95,12 @@ status = {
     "selected_dlt_output": None,
     "selected_dlt_mode": None,
     "duration_hours": 8,  # Default to 8 hours
-    "resource_manager": None,
-    "resources_created": False
+    "resource_creation_status": None,
+    "resource_cleanup_status": None,
+    "warehouse_id": None,
+    "warehouse_status": None,
+    "created_warehouse_ids": [],  # Store multiple warehouse IDs
+    "resource_managers": []  # Store resource managers for cleanup
 }
 
 # Initialize resource manager
@@ -106,42 +112,6 @@ def init_resource_manager():
 # Initialize Dash app
 app = dash.Dash(__name__)
 server = app.server
-
-# Add resource management endpoints
-@app.server.route('/api/resources/create', methods=['POST'])
-def create_resources():
-    """Endpoint to create Databricks resources."""
-    try:
-        if not status["resource_manager"]:
-            status["resource_manager"] = init_resource_manager()
-        
-        resource_ids = status["resource_manager"].create_resources()
-        status["resources_created"] = True
-        return jsonify({"status": "success", "resource_ids": resource_ids})
-    except Exception as e:
-        logger.error(f"Error creating resources: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.server.route('/api/resources/cleanup', methods=['POST'])
-def cleanup_resources():
-    """Endpoint to clean up Databricks resources."""
-    try:
-        if status["resource_manager"]:
-            status["resource_manager"].cleanup_resources()
-            status["resources_created"] = False
-            return jsonify({"status": "success"})
-        return jsonify({"status": "error", "message": "No resources to clean up"}), 404
-    except Exception as e:
-        logger.error(f"Error cleaning up resources: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.server.route('/api/resources/status', methods=['GET'])
-def get_resources_status():
-    """Endpoint to check resource creation status."""
-    return jsonify({
-        "resources_created": status["resources_created"],
-        "has_resource_manager": status["resource_manager"] is not None
-    })
 
 
 def generation_service():
@@ -665,26 +635,28 @@ For each table in the code:
 def create_header():
     """Create the header section of the app."""
     return html.Div([
-        html.H1("DLT StreamForge", style={'color': DB_COLORS['primary']}),
-        html.P("Generate realistic streaming data pipelines with Databricks Delta Live Tables"),
-        html.Div([
-            html.Button(
-                "Create SQL Warehouse",
-                id="create-resources-button",
-                style={**STYLES['button'], 'backgroundColor': DB_COLORS['success']}
-            ),
-            html.Button(
-                "Cleanup SQL Warehouse",
-                id="cleanup-resources-button",
-                style={**STYLES['button'], 'backgroundColor': DB_COLORS['primary']}
-            ),
-            html.Div(id="resource-status", style={'marginTop': '10px'})
-        ], style={'marginTop': '20px'})
-    ], style=STYLES['container'])
+        html.H1("DLT StreamForge", style={
+            'color': DB_COLORS['primary'],
+            'textAlign': 'center',
+            'marginBottom': '10px'
+        }),
+        html.P("Generate realistic streaming data pipelines with Databricks Declarative Pipelines", style={
+            'textAlign': 'center',
+            'fontSize': '16px',
+            'color': DB_COLORS['text']
+        })
+    ], style={**STYLES['container'], 'marginBottom': '20px'})
 
 def create_input_section():
     """Create the input section with path, dropdowns, and control button."""
     return html.Div([
+        html.H3("Data Generator", style={
+            'color': DB_COLORS['text'],
+            'fontWeight': '600',
+            'fontSize': '20px',
+            'marginBottom': '20px',
+            'textAlign': 'center'
+        }),
         html.Div([
             html.Div([
                 dcc.Input(
@@ -832,11 +804,147 @@ def create_input_section():
                 'fontWeight': '400'
             }
         ),
-    ], style={**STYLES['input_container'], 'paddingBottom': '30px'})
+    ], style={**STYLES['input_container'], 'paddingBottom': '30px', 'marginBottom': '20px'})
+
+def create_infrastructure_section():
+    """Create the infrastructure management section."""
+    return html.Div([
+        html.H3("SQL Warehouse Setup", style={
+            'color': DB_COLORS['text'],
+            'fontWeight': '600',
+            'fontSize': '20px',
+            'marginBottom': '20px',
+            'textAlign': 'center'
+        }),
+        
+        html.Div([
+            html.Div([
+                html.Label("Databricks Workspace ID:", style={
+                    'display': 'block',
+                    'marginBottom': '5px',
+                    'fontSize': '14px',
+                    'fontWeight': '500',
+                    'color': DB_COLORS['text']
+                }),
+                dcc.Input(
+                    id='databricks-host-input',
+                    type='text',
+                    placeholder='1444828305810485',
+                    style={
+                        'width': '100%',
+                        'padding': '8px 12px',
+                        'border': f'1px solid {DB_COLORS["border"]}',
+                        'borderRadius': '4px',
+                        'fontSize': '14px',
+                        'marginBottom': '15px'
+                    }
+                ),
+            ]),
+            
+            html.Div([
+                html.Label("Databricks Access Token:", style={
+                    'display': 'block',
+                    'marginBottom': '5px',
+                    'fontSize': '14px',
+                    'fontWeight': '500',
+                    'color': DB_COLORS['text']
+                }),
+                dcc.Input(
+                    id='databricks-token-input',
+                    type='password',
+                    placeholder='Enter your Databricks access token',
+                    style={
+                        'width': '100%',
+                        'padding': '8px 12px',
+                        'border': f'1px solid {DB_COLORS["border"]}',
+                        'borderRadius': '4px',
+                        'fontSize': '14px',
+                        'marginBottom': '15px'
+                    }
+                ),
+            ]),
+            
+            html.Div([
+                html.Label("Number of Warehouses:", style={
+                    'display': 'block',
+                    'marginBottom': '5px',
+                    'fontSize': '14px',
+                    'fontWeight': '500',
+                    'color': DB_COLORS['text']
+                }),
+                dcc.Input(
+                    id='warehouse-count-input',
+                    type='number',
+                    value=1,
+                    min=1,
+                    max=10,
+                    placeholder='Enter number of warehouses (1-10)',
+                    style={
+                        'width': '100%',
+                        'padding': '8px 12px',
+                        'border': f'1px solid {DB_COLORS["border"]}',
+                        'borderRadius': '4px',
+                        'fontSize': '14px',
+                        'marginBottom': '20px'
+                    }
+                ),
+            ]),
+            
+            html.Div([
+                html.Button([
+                    html.I(className="fas fa-plus", style={'marginRight': '8px'}),
+                    "Create SQL Warehouse"
+                ],
+                    id='create-warehouse-button',
+                    n_clicks=0,
+                    style={**STYLES['button'], 'backgroundColor': DB_COLORS['success'], 'marginRight': '10px'}
+                ),
+                html.Button([
+                    html.I(className="fas fa-trash", style={'marginRight': '8px'}),
+                    "Cleanup Resources"
+                ],
+                    id='infrastructure-cleanup-button',
+                    n_clicks=0,
+                    style={**STYLES['button'], 'backgroundColor': DB_COLORS['primary']}
+                ),
+            ], style={'textAlign': 'center', 'marginBottom': '15px'}),
+            
+            html.Div(
+                id='infrastructure-status',
+                style={
+                    'padding': '12px',
+                    'borderRadius': '4px',
+                    'color': DB_COLORS['text'],
+                    'fontSize': '14px',
+                    'fontWeight': '400',
+                    'minHeight': '20px'
+                }
+            ),
+            
+            html.Div(
+                id='warehouse-status-display',
+                style={
+                    'padding': '12px',
+                    'borderRadius': '4px',
+                    'backgroundColor': '#f8f9fa',
+                    'border': f'1px solid {DB_COLORS["border"]}',
+                    'marginTop': '15px',
+                    'display': 'none'
+                }
+            ),
+        ], style={'maxWidth': '500px', 'margin': '0 auto'}),
+    ], style={**STYLES['input_container'], 'marginTop': '20px', 'marginBottom': '20px'})
 
 def create_code_section():
     """Create the code display section with export button."""
     return html.Div([
+        html.H3("DLT Pipeline Code", style={
+            'color': DB_COLORS['text'],
+            'fontWeight': '600',
+            'fontSize': '20px',
+            'marginBottom': '20px',
+            'textAlign': 'center'
+        }),
         html.Div([
             html.Div([
                 html.Div([
@@ -854,6 +962,25 @@ def create_code_section():
                     ], style={
                         'display': 'flex',
                         'justifyContent': 'flex-end',
+                        'paddingBottom': '5px',
+                        'paddingRight': '20px',
+                        'gap': '10px'
+                    }),
+                    html.Div([
+                        html.Button([
+                            html.I(className="fas fa-rocket", style={'marginRight': '8px'}),
+                            "Deploy Pipeline"
+                        ],
+                            id='deploy-button',
+                            n_clicks=0,
+                            style={**STYLES['button'], 'backgroundColor': DB_COLORS['success']},
+                            disabled=True
+                        ),
+                        html.Div(id='deploy-status', style={'marginTop': '10px', 'fontSize': '14px'})
+                    ], style={
+                        'display': 'flex',
+                        'flexDirection': 'column',
+                        'alignItems': 'flex-end',
                         'paddingBottom': '5px',
                         'paddingRight': '20px'
                     }),
@@ -886,7 +1013,11 @@ def create_code_section():
 # App layout
 app.layout = html.Div([
     create_header(),
+    html.Div(style={'marginTop': '40px'}),  # Spacing after header
+    create_infrastructure_section(),
+    html.Div(style={'marginTop': '40px'}),  # Spacing after infrastructure section
     create_input_section(),
+    html.Div(style={'marginTop': '40px'}),  # Spacing after input section
     create_code_section(),
     dcc.Interval(id='interval-timer', interval=15000, n_intervals=0, disabled=True),  # 15 seconds for data generation
     dcc.Interval(id='countdown-timer', interval=1000, n_intervals=0, disabled=True),   # 1 second for countdown
@@ -1149,14 +1280,15 @@ def export_notebook(n_clicks, selected_language):
     )
 
 @app.callback(
-    Output('export-button', 'disabled'),
+    [Output('export-button', 'disabled'),
+     Output('deploy-button', 'disabled')],
     Input('dlt-code-display', 'children'),
     prevent_initial_call=True
 )
 def update_export_button(code_display):
     if not code_display or isinstance(code_display, str):
-        return True
-    return False
+        return True, True
+    return False, False
 
 # Add callback for initial state check
 @app.callback(
@@ -1230,45 +1362,199 @@ def update_code_display(language, current_display):
         logger.error(f"Error updating code display: {str(e)}")
         return current_display
 
-# Add new callbacks for resource management
+# Infrastructure management callbacks
 @app.callback(
-    Output('resource-status', 'children'),
-    [Input('create-resources-button', 'n_clicks'),
-     Input('cleanup-resources-button', 'n_clicks')],
+    [Output('infrastructure-status', 'children'),
+     Output('warehouse-status-display', 'children'),
+     Output('warehouse-status-display', 'style')],
+    [Input('create-warehouse-button', 'n_clicks'),
+     Input('infrastructure-cleanup-button', 'n_clicks')],
+    [State('databricks-host-input', 'value'),
+     State('databricks-token-input', 'value'),
+     State('warehouse-count-input', 'value')],
     prevent_initial_call=True
 )
-def handle_resource_management(create_clicks, cleanup_clicks):
-    """Handle resource management button clicks."""
+def handle_infrastructure_actions(create_clicks, cleanup_clicks, host, token, warehouse_count):
+    """Handle infrastructure creation and cleanup actions."""
     ctx = dash.callback_context
     if not ctx.triggered:
-        return ""
+        return "", "", {'display': 'none'}
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-    if button_id == 'create-resources-button':
-        try:
-            if not status["resource_manager"]:
-                status["resource_manager"] = init_resource_manager()
-            resource_ids = status["resource_manager"].create_resources()
-            status["resources_created"] = True
-            return html.Div([
-                html.P("SQL Warehouse created successfully!", style={'color': DB_COLORS['success']}),
-                html.Pre(json.dumps(resource_ids, indent=2), style=STYLES['code_block'])
+    if not host or not token:
+        return "Please provide both Databricks workspace ID and access token.", "", {'display': 'none'}
+    
+    # Validate warehouse count
+    if not warehouse_count or warehouse_count < 1 or warehouse_count > 10:
+        return "Please enter a valid number of warehouses (1-10).", "", {'display': 'none'}
+    
+    try:
+        # Format the host URL properly
+        formatted_host = host
+        if not host.startswith('http://') and not host.startswith('https://'):
+            # If it's just a workspace ID number, append the full domain
+            if '.' not in host:
+                formatted_host = f'https://{host}.cloud.databricks.com'
+            else:
+                formatted_host = f'https://{host}'
+        
+        resource_manager = ResourceManager(databricks_host=formatted_host, databricks_token=token)
+        
+        if button_id == 'create-warehouse-button':
+            # Create warehouses
+            warehouse_ids = []
+            warehouse_statuses = []
+            resource_managers = []  # Store resource managers for cleanup
+            
+            for i in range(warehouse_count):
+                # Create a new resource manager instance for each warehouse with unique name
+                warehouse_name = f"Delta Drive Discovery Warehouse {i+1}"
+                warehouse_resource_manager = ResourceManager(
+                    databricks_host=formatted_host, 
+                    databricks_token=token,
+                    warehouse_name=warehouse_name
+                )
+                
+                resource_ids = warehouse_resource_manager.create_resources()
+                warehouse_id = resource_ids["warehouse_id"]
+                warehouse_ids.append(warehouse_id)
+                resource_managers.append(warehouse_resource_manager)
+                
+                # Get warehouse status
+                warehouse_status = warehouse_resource_manager.get_warehouse_status(warehouse_id)
+                warehouse_statuses.append(warehouse_status)
+            
+            # Store warehouse IDs and resource managers for cleanup
+            status["created_warehouse_ids"] = warehouse_ids
+            status["resource_managers"] = resource_managers
+            
+            # Create status display
+            status_display = html.Div([
+                html.H4(f"{warehouse_count} Warehouse(s) Created Successfully!", style={'color': DB_COLORS['success'], 'marginBottom': '10px'}),
             ])
-        except Exception as e:
-            return html.P(f"Error creating SQL Warehouse: {str(e)}", style={'color': DB_COLORS['primary']})
+            
+            # Add individual warehouse details
+            for i, warehouse_status in enumerate(warehouse_statuses):
+                # Use current timestamp as fallback if created_at is not available
+                created_at = warehouse_status.get('created_at', 'N/A')
+                if created_at == 'N/A' or not created_at:
+                    import datetime
+                    created_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
+                
+                status_display.children.append(html.Div([
+                    html.H5(f"Warehouse {i+1}:", style={'marginTop': '15px', 'marginBottom': '5px'}),
+                    html.P(f"ID: {warehouse_status['id']}"),
+                    html.P(f"Name: {warehouse_status['name']}"),
+                    html.P(f"State: {warehouse_status['state']}"),
+                    html.P(f"Size: {warehouse_status['size']}"),
+                    html.P(f"Auto-stop after: {warehouse_status['auto_stop_mins']} minutes"),
+                    html.P(f"Created at: {created_at}")
+                ], style={'backgroundColor': '#f8f9fa', 'padding': '10px', 'borderRadius': '4px', 'marginBottom': '10px'}))
+            
+            return f"{warehouse_count} SQL Warehouse(s) created successfully!", status_display, {'display': 'block'}
+            
+        elif button_id == 'infrastructure-cleanup-button':
+            # Cleanup resources
+            if status["created_warehouse_ids"] and status["resource_managers"]:
+                # Clean up specific warehouses using their respective resource managers
+                for i, warehouse_id in enumerate(status["created_warehouse_ids"]):
+                    if i < len(status["resource_managers"]):
+                        resource_manager_instance = status["resource_managers"][i]
+                        resource_manager_instance.cleanup_resources([warehouse_id])
+                    else:
+                        # Fallback to main resource manager
+                        resource_manager.cleanup_resources([warehouse_id])
+                
+                status["created_warehouse_ids"] = []
+                status["resource_managers"] = []
+                return "Resources cleaned up successfully.", "", {'display': 'none'}
+            else:
+                # Clean up any tracked resources
+                resource_manager.cleanup_resources()
+                return "Resources cleaned up successfully.", "", {'display': 'none'}
+            
+    except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        return error_msg, "", {'display': 'none'}
+
+@app.callback(
+    Output('deploy-status', 'children'),
+    Input('deploy-button', 'n_clicks'),
+    [State('databricks-host-input', 'value'),
+     State('databricks-token-input', 'value'),
+     State('language-dropdown', 'value')],
+    prevent_initial_call=True
+)
+def deploy_pipeline(n_clicks, host, token, language):
+    """Deploy the DLT pipeline to Databricks workspace using resource manager."""
+    if not n_clicks:
+        raise dash.exceptions.PreventUpdate
     
-    elif button_id == 'cleanup-resources-button':
-        try:
-            if status["resource_manager"]:
-                status["resource_manager"].cleanup_resources()
-                status["resources_created"] = False
-                return html.P("SQL Warehouse cleaned up successfully!", style={'color': DB_COLORS['success']})
-            return html.P("No SQL Warehouse to clean up", style={'color': DB_COLORS['text']})
-        except Exception as e:
-            return html.P(f"Error cleaning up SQL Warehouse: {str(e)}", style={'color': DB_COLORS['primary']})
+    if not host or not token:
+        return html.Div("⚠️ Please provide Databricks workspace ID and access token in the SQL Warehouse Setup section.", 
+                       style={'color': '#FF3621'})
     
-    return ""
+    if not status['dlt_code'] or not status['industry']:
+        return html.Div("⚠️ No DLT code available. Please generate data first.", 
+                       style={'color': '#FF3621'})
+    
+    try:
+        # Format the host URL properly
+        formatted_host = host
+        if not host.startswith('http://') and not host.startswith('https://'):
+            # If it's just a workspace ID number, append the full domain
+            if '.' not in host:
+                formatted_host = f'https://{host}.cloud.databricks.com'
+            else:
+                formatted_host = f'https://{host}'
+        
+        # Create resource manager instance
+        resource_manager = ResourceManager(databricks_host=formatted_host, databricks_token=token)
+        
+        # Create notebook content
+        notebook_content = create_notebook_content(status['dlt_code'], language)
+        
+        # Create pipeline name
+        pipeline_name = f"StreamForge_{status['industry']}_Pipeline"
+        
+        # Deploy the pipeline using resource manager
+        result = resource_manager.create_dlt_pipeline(
+            notebook_content, 
+            pipeline_name, 
+            status['output_path'], 
+            status['industry']
+        )
+        
+        if result['status'] == 'success':
+            return html.Div([
+                html.Div("✅ Pipeline deployed successfully!", style={'color': DB_COLORS['success'], 'fontWeight': 'bold'}),
+                html.Div(f"Pipeline ID: {result['pipeline_id']}", style={'marginTop': '5px'}),
+                html.Div(f"Job ID: {result['job_id']}", style={'marginTop': '5px'}),
+                html.Div(f"Pipeline Name: {result['pipeline_name']}", style={'marginTop': '5px'}),
+                html.Div(f"Notebook Path: {result['notebook_path']}", style={'marginTop': '5px'}),
+                html.Div(f"Volume Path: {result['volume_path']}", style={'marginTop': '5px'}),
+                html.Div("🎯 Pipeline will trigger when new files arrive at the volume path", 
+                        style={'marginTop': '10px', 'fontStyle': 'italic', 'color': DB_COLORS['secondary']})
+            ])
+        else:
+            return html.Div(f"❌ Deployment failed: {result['message']}", 
+                           style={'color': '#FF3621'})
+            
+    except Exception as e:
+        return html.Div(f"❌ Error deploying pipeline: {str(e)}", 
+                       style={'color': '#FF3621'})
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(
+        debug=True,
+        dev_tools_hot_reload=True,
+        dev_tools_hot_reload_interval=1000,
+        dev_tools_hot_reload_watch_interval=1000,
+        dev_tools_hot_reload_max_retry=5,
+        dev_tools_silence_routes_logging=True,
+        dev_tools_ui=True,
+        dev_tools_props_check=True,
+        dev_tools_serve_dev_bundles=True,
+        dev_tools_prune_errors=True,
+    )

@@ -1,47 +1,49 @@
-#Some changes
-
+import base64
 import os
 import json
 import logging
 import argparse
 import requests
 from urllib.parse import urljoin
-from dotenv import load_dotenv
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
-logger.info("Loading environment variables from .env file...")
-load_dotenv()
-logger.info(f"Current working directory: {os.getcwd()}")
-logger.info(f"Environment variables loaded: DATABRICKS_HOST={os.getenv('DATABRICKS_HOST')}, DATABRICKS_TOKEN={'*' * 10 if os.getenv('DATABRICKS_TOKEN') else 'Not found'}")
-
 class ResourceManager:
-    def __init__(self, config_path=None):
+    def __init__(self, config_path=None, databricks_host=None, databricks_token=None, warehouse_name=None):
+        """
+        Initialize the ResourceManager.
+        
+        Args:
+            config_path (str): Path to the configuration file
+            databricks_host (str): Databricks workspace URL
+            databricks_token (str): Databricks access token
+            warehouse_name (str): Custom name for the warehouse (optional)
+        """
+        self.config_path = config_path
+        self.databricks_host = databricks_host
+        self.databricks_token = databricks_token
+        self.warehouse_name = warehouse_name
+        self.resources_created = False
+        self.warehouse_id = None
+        self.cluster_id = None
+        
         self.config = self._load_config(config_path)
         
-        # Force token-based authentication
-        os.environ['DATABRICKS_AUTH_TYPE'] = 'pat'
-        
-        # Get and validate host URL
-        host = os.getenv('DATABRICKS_HOST', '')
-        if not host.startswith('http://') and not host.startswith('https://'):
-            host = f'https://{host}'
-        self.host = host
-        
-        self.token = os.getenv('DATABRICKS_TOKEN')
+        # Use provided credentials or fall back to environment variables
+        self.host = databricks_host or os.getenv('DATABRICKS_HOST', '')
+        self.token = databricks_token or os.getenv('DATABRICKS_TOKEN', '')
         
         if not self.host or not self.token:
             raise ValueError(
-                "DATABRICKS_HOST and DATABRICKS_TOKEN must be set in the .env file. "
-                "Example .env file contents:\n"
-                "DATABRICKS_HOST=https://your-workspace.cloud.databricks.com\n"
-                "DATABRICKS_TOKEN=your-access-token"
+                "DATABRICKS_HOST and DATABRICKS_TOKEN must be provided as parameters or set as environment variables."
             )
         
-        # Ensure host URL ends with a slash
+        # Ensure host URL is properly formatted
+        if not self.host.startswith('http://') and not self.host.startswith('https://'):
+            self.host = f'https://{self.host}'
+        
         if not self.host.endswith('/'):
             self.host = f"{self.host}/"
         
@@ -52,6 +54,11 @@ class ResourceManager:
             'Content-Type': 'application/json'
         }
         
+    def _get_current_timestamp(self):
+        """Get current timestamp in readable format."""
+        import datetime
+        return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
+
     def _load_config(self, config_path):
         """Load configuration from JSON file or use defaults"""
         if config_path and os.path.exists(config_path):
@@ -59,10 +66,10 @@ class ResourceManager:
                 return json.load(f)
         return {
             "warehouse": {
-                "name": "Gas Emissions Analytics Warehouse",
-                "cluster_size": "X-Large",  # Maximum size for serverless
+                "name": self.warehouse_name if self.warehouse_name else "Delta Drive Discovery Warehouse",
+                "cluster_size": "X-Large",
                 "min_clusters": 1,
-                "max_clusters": 2,  # Using 2 clusters for maximum compute power
+                "max_clusters": 10,  # Updated to 10 clusters
                 "auto_stop_mins": 480,  # 8 hours
                 "tags": {
                     "Project": "Gas-Emissions",
@@ -76,14 +83,6 @@ class ResourceManager:
         logger.info("Starting SQL Warehouse creation...")
         
         try:
-            # Note: We are using serverless compute (PRO warehouse type) instead of classic compute
-            # because the workspace lacks the necessary AWS IAM permissions to launch EC2 instances.
-            # The error "UnauthorizedOperation: You are not authorized to perform this operation"
-            # indicates that the Databricks workspace's AWS role doesn't have permissions to:
-            # 1. Launch EC2 instances
-            # 2. Create and manage VPC resources
-            # 3. Manage security groups and network interfaces
-            
             # Prepare warehouse creation payload
             payload = {
                 "name": self.config["warehouse"]["name"],
@@ -102,7 +101,7 @@ class ResourceManager:
             logger.info("Sending warehouse creation request...")
             api_url = f"{self.host}api/2.0/sql/warehouses"
             logger.info(f"API URL: {api_url}")
-            logger.info(f"Payload: {json.dumps(payload, indent=2)}")  # Log the payload for debugging
+            logger.info(f"Payload: {json.dumps(payload, indent=2)}")
             
             response = requests.post(
                 api_url,
@@ -119,11 +118,16 @@ class ResourceManager:
             if not warehouse_id:
                 raise ValueError("No warehouse ID in response")
             
+            # Store the warehouse ID for cleanup tracking
+            self.warehouse_id = str(warehouse_id)
+            self.resources_created = True
+            
             logger.info(f"Created warehouse with ID: {warehouse_id}")
 
             # Save resource ID to a file for later cleanup
             resource_ids = {
-                "warehouse_id": str(warehouse_id)
+                "warehouse_id": str(warehouse_id),
+                "created_at": warehouse_data.get('created_at')  # Store the creation timestamp
             }
             
             with open("resource_ids.json", "w") as f:
@@ -133,46 +137,61 @@ class ResourceManager:
 
         except Exception as e:
             logger.error(f"Error creating SQL Warehouse: {str(e)}")
-            logger.error(f"Error type: {type(e)}")
-            logger.error(f"Error details: {e.__dict__ if hasattr(e, '__dict__') else 'No details available'}")
-            import traceback
-            logger.error(f"Full traceback: {traceback.format_exc()}")
             raise
 
-    def cleanup_resources(self, resource_ids=None):
-        """Clean up SQL Warehouse"""
-        logger.info("Starting resource cleanup...")
+    def _delete_warehouse(self, warehouse_id):
+        """Delete a specific warehouse."""
+        api_url = f"{self.host}api/2.0/sql/warehouses/{warehouse_id}"
+        response = requests.delete(api_url, headers=self.headers)
         
+        if response.status_code != 200:
+            raise Exception(f"Failed to delete warehouse {warehouse_id}: {response.text}")
+        
+        logger.info(f"Deleted warehouse: {warehouse_id}")
+    
+    def _delete_cluster(self, cluster_id):
+        """Delete a specific cluster."""
+        api_url = f"{self.host}api/2.0/clusters/delete"
+        payload = {"cluster_id": cluster_id}
+        response = requests.post(api_url, headers=self.headers, json=payload)
+        
+        if response.status_code != 200:
+            raise Exception(f"Failed to delete cluster {cluster_id}: {response.text}")
+        
+        logger.info(f"Deleted cluster: {cluster_id}")
+
+    def cleanup_resources(self, warehouse_ids=None):
+        """
+        Clean up created resources.
+        
+        Args:
+            warehouse_ids (list): Optional list of warehouse IDs to clean up. If None, cleans up all tracked resources.
+        """
         try:
-            # Load resource ID from file if not provided
-            if resource_ids is None and os.path.exists("resource_ids.json"):
-                with open("resource_ids.json", "r") as f:
-                    resource_ids = json.load(f)
-            
-            if not resource_ids or "warehouse_id" not in resource_ids:
-                logger.error("No warehouse ID found for cleanup")
-                return
-            
-            # Delete the warehouse using REST API
-            api_url = f"{self.host}api/2.0/sql/warehouses/{resource_ids['warehouse_id']}"
-            logger.info(f"API URL: {api_url}")
-            
-            response = requests.delete(
-                api_url,
-                headers=self.headers
-            )
-            
-            if response.status_code != 200:
-                raise Exception(f"Failed to delete warehouse: {response.text}")
-            
-            logger.info(f"Deleted warehouse: {resource_ids['warehouse_id']}")
-            
-            # Remove the resource IDs file
-            if os.path.exists("resource_ids.json"):
-                os.remove("resource_ids.json")
-            
+            if warehouse_ids:
+                # Clean up specific warehouses
+                for warehouse_id in warehouse_ids:
+                    self._delete_warehouse(warehouse_id)
+                    logger.info(f"Cleaned up warehouse: {warehouse_id}")
+            else:
+                # Clean up tracked resources
+                if self.warehouse_id:
+                    self._delete_warehouse(self.warehouse_id)
+                    logger.info(f"Cleaned up warehouse: {self.warehouse_id}")
+                
+                if self.cluster_id:
+                    self._delete_cluster(self.cluster_id)
+                    logger.info(f"Cleaned up cluster: {self.cluster_id}")
+                
+                # Clean up DLT resources
+                self.cleanup_dlt_resources()
+                
+                self.resources_created = False
+                self.warehouse_id = None
+                self.cluster_id = None
+                
         except Exception as e:
-            logger.error(f"Error during cleanup: {str(e)}")
+            logger.error(f"Error cleaning up resources: {str(e)}")
             raise
 
     def get_warehouse_status(self, warehouse_id):
@@ -185,6 +204,37 @@ class ResourceManager:
                 raise Exception(f"Failed to get warehouse status: {response.text}")
             
             warehouse_data = response.json()
+            
+            # Debug: Log the full response to see what fields are available
+            logger.debug(f"Warehouse API response: {json.dumps(warehouse_data, indent=2)}")
+            
+            # Extract and format the created_at timestamp
+            created_at = warehouse_data.get('created_at')
+            formatted_created_at = "N/A"
+            
+            if created_at:
+                try:
+                    # If it's a timestamp in milliseconds, convert to readable format
+                    if isinstance(created_at, (int, float)):
+                        import datetime
+                        # Convert milliseconds to seconds if needed
+                        if created_at > 1e10:  # Likely milliseconds
+                            created_at = created_at / 1000
+                        formatted_created_at = datetime.datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M:%S UTC')
+                    elif isinstance(created_at, str):
+                        # If it's already a string, try to parse and format it
+                        import datetime
+                        try:
+                            # Try parsing ISO format
+                            dt = datetime.datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                            formatted_created_at = dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+                        except:
+                            # If parsing fails, use as-is
+                            formatted_created_at = created_at
+                except Exception as e:
+                    logger.warning(f"Could not format created_at timestamp '{created_at}': {str(e)}")
+                    formatted_created_at = str(created_at) if created_at else "N/A"
+            
             return {
                 'id': warehouse_data.get('id'),
                 'name': warehouse_data.get('name'),
@@ -193,20 +243,246 @@ class ResourceManager:
                 'num_clusters': warehouse_data.get('num_clusters'),
                 'auto_stop_mins': warehouse_data.get('auto_stop_mins'),
                 'creator_name': warehouse_data.get('creator_name'),
-                'created_at': warehouse_data.get('created_at')
+                'created_at': formatted_created_at
             }
         except Exception as e:
             logger.error(f"Error getting warehouse status: {str(e)}")
+            raise
+
+    def create_dlt_pipeline(self, notebook_content, pipeline_name, volume_path, industry):
+        """
+        Create a DLT pipeline with file triggers in the customer's workspace.
+        
+        Args:
+            notebook_content (str): Jupyter notebook content as JSON string
+            pipeline_name (str): Name for the DLT pipeline
+            volume_path (str): Path to the volume where data files arrive
+            industry (str): Industry name for schema and tags
+        
+        Returns:
+            dict: Response with pipeline ID, job ID, and status
+        """
+        try:
+            import uuid
+            import json
+            
+            # Step 1: Create/upload the notebook as a Python file
+            notebook_api_url = f"{self.host}api/2.0/workspace/import"
+            
+            # Create a unique notebook path in the workspace
+            notebook_path = f"/Workspace/{pipeline_name}_dlt_pipeline.py"
+            
+            # Convert notebook content to Python file content
+            try:
+                notebook_data = json.loads(notebook_content)
+                python_content = ""
+                
+                # Extract Python code from notebook cells
+                for cell in notebook_data.get('cells', []):
+                    if cell.get('cell_type') == 'code':
+                        source = cell.get('source', [])
+                        if isinstance(source, list):
+                            python_content += ''.join(source)
+                        else:
+                            python_content += str(source)
+                        python_content += '\n\n'
+                
+                # If no Python content extracted, use the original notebook content
+                if not python_content.strip():
+                    python_content = notebook_content
+                    
+            except Exception as e:
+                logger.warning(f"Could not parse notebook JSON, using as-is: {str(e)}")
+                python_content = notebook_content
+            
+            notebook_payload = {
+                "path": notebook_path,
+                "format": "PYTHON",  # Upload as Python file, not JUPYTER
+                "content": base64.b64encode(python_content.encode("utf-8")).decode("utf-8"),
+                "overwrite": True
+            }
+            
+            response = requests.post(notebook_api_url, headers=self.headers, json=notebook_payload)
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to upload notebook: {response.text}")
+            
+            logger.info(f"Notebook uploaded successfully to: {notebook_path}")
+            
+            # Step 2: Create DLT pipeline with proper structure and file triggers
+            pipeline_api_url = f"{self.host}api/2.0/pipelines"
+            
+            # Generate a unique pipeline ID
+            pipeline_id = str(uuid.uuid4())
+            
+            # Create the pipeline payload with the structure specified
+            pipeline_payload = {
+                "id": pipeline_id,
+                "pipeline_type": "WORKSPACE",
+                "name": pipeline_name,
+                "libraries": [
+                    {
+                        "glob": {
+                            "include": notebook_path
+                        }
+                    }
+                ],
+                "schema": f"synthetic_{industry.lower().replace(' ', '_')}",
+                "continuous": False,
+                "development": True,
+                "photon": True,
+                "channel": "PREVIEW",
+                "catalog": f"streamforge_{industry.lower().replace(' ', '_')}_catalog",
+                "serverless": True,
+                "tags": {
+                    "Project": "StreamForge",
+                    "Schema": f"{industry}-Generated",
+                    "GeneratedBy": "DLT-StreamForge",
+                    "VolumePath": volume_path
+                },
+                "root_path": f"/Workspace/Repos/StreamForge"
+            }
+            
+            response = requests.post(pipeline_api_url, headers=self.headers, json=pipeline_payload)
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to create DLT pipeline: {response.text}")
+            
+            pipeline_data = response.json()
+            created_pipeline_id = pipeline_data.get('pipeline_id', pipeline_id)
+            
+            logger.info(f"DLT pipeline created successfully with ID: {created_pipeline_id}")
+            
+            # Step 3: Create a job to run the pipeline with file triggers
+            job_api_url = f"{self.host}api/2.1/jobs/create"
+            
+            job_payload = {
+                "name": f"{pipeline_name}_Job",
+                "email_notifications": {
+                    "on_success": [],
+                    "on_failure": [],
+                    "no_alert_for_skipped_runs": False
+                },
+                "timeout_seconds": 0,
+                "max_concurrent_runs": 1,
+                "tasks": [
+                    {
+                        "task_key": "dlt_pipeline_task",
+                        "pipeline_task": {
+                            "pipeline_id": created_pipeline_id
+                        },
+                        "timeout_seconds": 0,
+                        "email_notifications": {},
+                        "retry_on_timeout": False,
+                        "max_retries": 0,
+                        "min_retry_interval_millis": 0,
+                        "retry_on_timeout": False
+                    }
+                ],
+                "format": "MULTI_TASK",
+                "tags": {
+                    "Project": "StreamForge",
+                    "Pipeline": pipeline_name,
+                    "Industry": industry
+                }
+            }
+            
+            response = requests.post(job_api_url, headers=self.headers, json=job_payload)
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to create job: {response.text}")
+            
+            job_data = response.json()
+            job_id = job_data.get('job_id')
+            
+            logger.info(f"Job created successfully with ID: {job_id}")
+            
+            # Store the created resources for cleanup
+            if not hasattr(self, 'dlt_resources'):
+                self.dlt_resources = []
+            
+            self.dlt_resources.append({
+                'pipeline_id': created_pipeline_id,
+                'job_id': job_id,
+                'notebook_path': notebook_path,
+                'pipeline_name': pipeline_name
+            })
+            
+            return {
+                "status": "success",
+                "pipeline_id": created_pipeline_id,
+                "job_id": job_id,
+                "notebook_path": notebook_path,
+                "pipeline_name": pipeline_name,
+                "volume_path": volume_path
+            }
+            
+        except Exception as e:
+            logger.error(f"Error creating DLT pipeline: {str(e)}")
+            return {
+                "status": "error",
+                "message": str(e)
+            }
+    
+    def cleanup_dlt_resources(self):
+        """Clean up DLT pipelines, jobs, and notebooks."""
+        try:
+            if not hasattr(self, 'dlt_resources') or not self.dlt_resources:
+                logger.info("No DLT resources to clean up")
+                return
+            
+            for resource in self.dlt_resources:
+                # Delete the job
+                if 'job_id' in resource:
+                    job_api_url = f"{self.host}api/2.1/jobs/delete"
+                    job_payload = {"job_id": resource['job_id']}
+                    response = requests.post(job_api_url, headers=self.headers, json=job_payload)
+                    if response.status_code == 200:
+                        logger.info(f"Deleted job: {resource['job_id']}")
+                    else:
+                        logger.warning(f"Failed to delete job {resource['job_id']}: {response.text}")
+                
+                # Delete the pipeline
+                if 'pipeline_id' in resource:
+                    pipeline_api_url = f"{self.host}api/2.0/pipelines/{resource['pipeline_id']}"
+                    response = requests.delete(pipeline_api_url, headers=self.headers)
+                    if response.status_code == 200:
+                        logger.info(f"Deleted pipeline: {resource['pipeline_id']}")
+                    else:
+                        logger.warning(f"Failed to delete pipeline {resource['pipeline_id']}: {response.text}")
+                
+                # Delete the notebook (Python file)
+                if 'notebook_path' in resource:
+                    notebook_api_url = f"{self.host}api/2.0/workspace/delete"
+                    notebook_payload = {"path": resource['notebook_path']}
+                    response = requests.post(notebook_api_url, headers=self.headers, json=notebook_payload)
+                    if response.status_code == 200:
+                        logger.info(f"Deleted Python file: {resource['notebook_path']}")
+                    else:
+                        logger.warning(f"Failed to delete Python file {resource['notebook_path']}: {response.text}")
+            
+            # Clear the resources list
+            self.dlt_resources = []
+            logger.info("DLT resources cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up DLT resources: {str(e)}")
             raise
 
 def main():
     parser = argparse.ArgumentParser(description="Gas Emissions Resource Manager")
     parser.add_argument("--cleanup", action="store_true", help="Clean up resources instead of creating them")
     parser.add_argument("--config", help="Path to configuration file")
+    parser.add_argument("--host", help="Databricks host URL")
+    parser.add_argument("--token", help="Databricks access token")
     parser.add_argument("--status", help="Check status of a specific warehouse ID")
     args = parser.parse_args()
 
-    resource_manager = ResourceManager(config_path=args.config)
+    resource_manager = ResourceManager(
+        databricks_host=args.host,
+        databricks_token=args.token,
+        config_path=args.config
+    )
     
     try:
         if args.status:

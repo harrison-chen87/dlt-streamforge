@@ -1,0 +1,52 @@
+# Virtual environments
+.venv/
+venv/
+env/
+.env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Node modules (if any)
+node_modules/
+
+# Git
+.git/
+
+# Databricks SDK cache
+.databricks/
+
+# Generated files
+*.csv
+*.parquet
+*.json
+resource_ids.json
+
+# Schema files (large YAML files)
+schema/
+
+# Infrastructure config
+infrastructure/config.json 
