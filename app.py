@@ -829,7 +829,7 @@ def create_infrastructure_section():
                 dcc.Input(
                     id='databricks-host-input',
                     type='text',
-                    placeholder='1444828305810485',
+                    placeholder='1464913369926600',
                     style={
                         'width': '100%',
                         'padding': '8px 12px',
